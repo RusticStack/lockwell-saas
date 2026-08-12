@@ -10,6 +10,7 @@ import (
 
 	"github.com/RusticStack/lockwell-saas/internal/billing"
 	"github.com/RusticStack/lockwell-saas/internal/entitlements"
+	"github.com/RusticStack/lockwell-saas/internal/financial"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -64,6 +65,62 @@ func TestPostgresMeterExportAndReconciliationLifecycle(t *testing.T) {
 	}
 	if err := repo.MarkReconciled(ctx, export.ID, 42, time.Now().UTC()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPostgresFinancialReconciliationBindsCustomerAndPersistsLines(t *testing.T) {
+	databaseURL := os.Getenv("LOCKWELL_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("LOCKWELL_TEST_DATABASE_URL is not configured")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	repo := Postgres{Pool: pool}
+	accountID, _ := randomUUID()
+	customerID := "cus_" + accountID
+	subscriptionID := "sub_" + accountID
+	invoiceID := "in_" + accountID
+	eventID := "evt_invoice_" + accountID
+	_, err = pool.Exec(ctx, `INSERT INTO customer_accounts(id,email,password_hash,terms_version,terms_accepted_at,stripe_customer_id)VALUES($1,$2,'hash','test',now(),$3)`, accountID, accountID+"@example.test", customerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(ctx, `INSERT INTO hosted_subscriptions(stripe_subscription_id,account_id,stripe_customer_id,plan_code,stripe_price_id,stripe_status,entitlement_status,last_stripe_event_created,last_stripe_event_priority,last_stripe_event_id)VALUES($1,$2,$3,'starter','price_starter','active','active',now(),1,'seed')`, subscriptionID, accountID, customerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM hosted_refunds WHERE account_id=$1`, accountID)
+		_, _ = pool.Exec(ctx, `DELETE FROM hosted_invoice_lines WHERE stripe_invoice_id=$1`, invoiceID)
+		_, _ = pool.Exec(ctx, `DELETE FROM hosted_invoices WHERE account_id=$1`, accountID)
+		_, _ = pool.Exec(ctx, `DELETE FROM control_plane_outbox WHERE aggregate_id=$1`, eventID)
+		_, _ = pool.Exec(ctx, `DELETE FROM stripe_event_inbox WHERE event_id=$1`, eventID)
+		_, _ = pool.Exec(ctx, `DELETE FROM hosted_subscriptions WHERE account_id=$1`, accountID)
+		_, _ = pool.Exec(ctx, `DELETE FROM customer_accounts WHERE id=$1`, accountID)
+	})
+	payload := []byte(fmt.Sprintf(`{"id":%q,"type":"invoice.finalized","api_version":"test","created":1700000000,"data":{"object":{"id":%q}}}`, eventID, invoiceID))
+	digest := sha256.Sum256(payload)
+	outboxID, _ := randomUUID()
+	if _, err = repo.RecordStripeEvent(ctx, billing.StripeEvent{ID: eventID, Type: "invoice.finalized", APIVersion: "test", Created: 1700000000}, payload, digest, outboxID); err != nil {
+		t.Fatal(err)
+	}
+	claimed, ok, err := repo.ClaimNextFinancialEvent(ctx, time.Now().UTC())
+	if err != nil || !ok || claimed.Event.ResourceID != invoiceID {
+		t.Fatalf("claim=%#v ok=%v err=%v", claimed, ok, err)
+	}
+	now := time.Now().UTC()
+	invoice := financial.Invoice{ID: invoiceID, AccountID: accountID, CustomerID: customerID, SubscriptionID: subscriptionID, Currency: "eur", Status: "paid", Subtotal: 1000, Tax: 230, Total: 1230, AmountPaid: 1230, CreatedAt: now, Lines: []financial.InvoiceLine{{ID: "il_" + accountID, PriceID: "price_starter", Description: "Starter", Currency: "eur", Amount: 1000, Quantity: 1}}}
+	if err = repo.ApplyInvoice(ctx, claimed.OutboxID, invoice, now); err != nil {
+		t.Fatal(err)
+	}
+	var total, tax int64
+	var lineCount int
+	if err = pool.QueryRow(ctx, `SELECT total,tax,(SELECT count(*) FROM hosted_invoice_lines WHERE stripe_invoice_id=$1) FROM hosted_invoices WHERE stripe_invoice_id=$1`, invoiceID).Scan(&total, &tax, &lineCount); err != nil || total != 1230 || tax != 230 || lineCount != 1 {
+		t.Fatalf("total=%d tax=%d lines=%d err=%v", total, tax, lineCount, err)
 	}
 }
 
