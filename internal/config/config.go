@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type Config struct {
 	EmailFrom                 string
 	EmailFromName             string
 	EmailVerificationURL      string
+	CustomerOrigin            string
 }
 
 func Load() (Config, error) {
@@ -68,6 +70,7 @@ func Load() (Config, error) {
 		EmailFrom:                 strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_FROM")),
 		EmailFromName:             strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_FROM_NAME")),
 		EmailVerificationURL:      strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_VERIFICATION_URL")),
+		CustomerOrigin:            strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CUSTOMER_ORIGIN")),
 	}
 	cfg.ProvisioningEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PROVISIONING_ENABLED")))
 	cfg.EmailEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_ENABLED")))
@@ -98,6 +101,13 @@ func Load() (Config, error) {
 	}
 	if cfg.EmailEnabled && (cfg.ScalewayProjectID == "" || cfg.ScalewayAuthToken == "" || cfg.EmailFrom == "" || cfg.EmailVerificationURL == "") {
 		return Config{}, errors.New("enabled email verification requires Scaleway project/auth, sender, and verification URL")
+	}
+	if cfg.CustomerOrigin != "" {
+		origin, err := url.Parse(cfg.CustomerOrigin)
+		if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Host == "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") {
+			return Config{}, errors.New("LOCKWELL_SAAS_CUSTOMER_ORIGIN must be an HTTP(S) origin without credentials, path, query, or fragment")
+		}
+		cfg.CustomerOrigin = strings.TrimSuffix(cfg.CustomerOrigin, "/")
 	}
 	return cfg, nil
 }

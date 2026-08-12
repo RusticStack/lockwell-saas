@@ -14,6 +14,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/billing"
 	"github.com/RusticStack/lockwell-saas/internal/config"
 	"github.com/RusticStack/lockwell-saas/internal/entitlements"
+	"github.com/RusticStack/lockwell-saas/internal/httpapi"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
 	"github.com/RusticStack/lockwell-saas/internal/provisioning"
 	"github.com/RusticStack/lockwell-saas/internal/store"
@@ -95,7 +96,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           mux,
+		Handler:           httpapi.CustomerCORS(cfg.CustomerOrigin, mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

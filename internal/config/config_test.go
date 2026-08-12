@@ -40,3 +40,25 @@ func TestLoadRejectsPartialEmailConfiguration(t *testing.T) {
 		t.Fatal("expected partial email configuration denial")
 	}
 }
+
+func TestLoadValidatesCustomerOrigin(t *testing.T) {
+	setRequiredBase(t)
+	t.Setenv("LOCKWELL_SAAS_CUSTOMER_ORIGIN", "https://app.example.test/")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CustomerOrigin != "https://app.example.test" {
+		t.Fatalf("customer origin = %q", cfg.CustomerOrigin)
+	}
+
+	for _, invalid := range []string{"app.example.test", "https://user@app.example.test", "https://app.example.test/hosted", "https://app.example.test?token=x"} {
+		t.Run(invalid, func(t *testing.T) {
+			setRequiredBase(t)
+			t.Setenv("LOCKWELL_SAAS_CUSTOMER_ORIGIN", invalid)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected invalid customer origin denial")
+			}
+		})
+	}
+}
