@@ -13,6 +13,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/accounts"
 	"github.com/RusticStack/lockwell-saas/internal/billing"
 	"github.com/RusticStack/lockwell-saas/internal/config"
+	"github.com/RusticStack/lockwell-saas/internal/customer"
 	"github.com/RusticStack/lockwell-saas/internal/entitlements"
 	"github.com/RusticStack/lockwell-saas/internal/financial"
 	"github.com/RusticStack/lockwell-saas/internal/httpapi"
@@ -81,6 +82,7 @@ func main() {
 	mux.HandleFunc("POST /v1/accounts/login", accountHTTP.Login)
 	mux.HandleFunc("POST /v1/accounts/verification/request", accountHTTP.RequestVerification)
 	mux.HandleFunc("POST /v1/accounts/verification/confirm", accountHTTP.VerifyEmail)
+	mux.HandleFunc("GET /v1/customer/status", customer.HTTPHandler{Accounts: accountService, Repo: repo}.Status)
 	mux.HandleFunc("POST /v1/billing/checkout", billingHTTP.Checkout)
 	mux.HandleFunc("POST /v1/billing/portal", billingHTTP.Portal)
 	if cfg.ProvisioningEnabled {
