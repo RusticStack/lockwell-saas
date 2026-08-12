@@ -41,6 +41,7 @@ type Config struct {
 	EmailFromName             string
 	EmailVerificationURL      string
 	CustomerOrigin            string
+	MetricsToken              string
 }
 
 func Load() (Config, error) {
@@ -71,6 +72,7 @@ func Load() (Config, error) {
 		EmailFromName:             strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_FROM_NAME")),
 		EmailVerificationURL:      strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_VERIFICATION_URL")),
 		CustomerOrigin:            strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CUSTOMER_ORIGIN")),
+		MetricsToken:              strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_METRICS_TOKEN")),
 	}
 	cfg.ProvisioningEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PROVISIONING_ENABLED")))
 	cfg.EmailEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_ENABLED")))
@@ -83,6 +85,9 @@ func Load() (Config, error) {
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("LOCKWELL_SAAS_DATABASE_URL is required")
+	}
+	if len(cfg.MetricsToken) < 32 {
+		return Config{}, errors.New("LOCKWELL_SAAS_METRICS_TOKEN must contain at least 32 characters")
 	}
 	if cfg.StripeWebhookSecret == "" {
 		return Config{}, errors.New("LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET is required")

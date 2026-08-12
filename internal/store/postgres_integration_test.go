@@ -171,6 +171,13 @@ func TestPostgresCustomerStatusIsAccountScoped(t *testing.T) {
 	if status.Subscription == nil || status.Subscription.PlanCode != "team" || len(status.Usage) != 1 || status.Usage[0].Value != 42 || len(status.Invoices) != 1 || status.Invoices[0].ID != invoiceID {
 		t.Fatalf("status=%#v", status)
 	}
+	operations, err := repo.OperationalSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operations.Accounts < 2 || operations.ActiveEntitlements < 1 || operations.ReconciledInvoices < 2 {
+		t.Fatalf("operations=%#v", operations)
+	}
 }
 
 func mustRandomUUID(t *testing.T) string {
