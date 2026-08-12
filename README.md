@@ -1,5 +1,12 @@
 # Lockwell hosted control plane
 
+This first-party Lockwell source is **source-available under PolyForm Noncommercial 1.0.0**, not OSI Open Source.
+Commercial use—including TangibleShift ERP, paid use, resale, managed hosting, and OEM use—requires an explicit written
+commercial grant. See [`LICENSE`](LICENSE), [`NOTICE`](NOTICE), and
+[`COMMERCIAL-LICENSE.md`](COMMERCIAL-LICENSE.md). This repository remains prelaunch engineering evidence; these terms do
+not make hosted Lockwell available, authorize payment collection, or clear its provider, legal, recovery, or support
+gates.
+
 This repository contains the customer, billing, and infrastructure orchestration boundary for hosted Lockwell Object
 Storage. It is intentionally separate from the self-hosted data plane: customer payloads and Lockwell access-key
 secrets must never pass through or persist in this service.
