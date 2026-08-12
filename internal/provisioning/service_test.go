@@ -39,10 +39,11 @@ type fakeCells struct {
 	adminToken string
 }
 
-func (f *fakeCells) Provision(_ context.Context, _ Reservation, token string) (CreatedCredential, error) {
+func (f *fakeCells) Provision(ctx context.Context, r Reservation, token string, vault SecretVault) (ProvisionedCredential, error) {
 	f.calls++
 	f.adminToken = token
-	return CreatedCredential{AccessKeyID: "AKIA_TEST", SecretKey: "secret-once"}, nil
+	ref, err := vault.Put(ctx, "tenant/"+r.ID, []byte("secret-once"))
+	return ProvisionedCredential{AccessKeyID: "AKIA_TEST", SecretRef: ref}, err
 }
 
 type fakeRepo struct {
@@ -56,10 +57,12 @@ type fakeRepo struct {
 	claimed, redeemed    bool
 }
 
-func (f *fakeRepo) Reserve(_ context.Context, account, plan string, _ time.Time) (Reservation, bool, error) {
+func (f *fakeRepo) Reserve(_ context.Context, account, plan string, quota int64, _ time.Time) (Reservation, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.r.AccountID = account
+	f.r.PlanCode = plan
+	f.r.QuotaBytes = quota
 	return f.r, f.ready, nil
 }
 func (f *fakeRepo) Complete(_ context.Context, _, access, ref string, _ time.Time) error {
@@ -112,7 +115,7 @@ func TestProvisionAndRedeemCredentialExactlyOnce(t *testing.T) {
 	repo := &fakeRepo{r: Reservation{ID: "provision-1", CellID: "cell-eu-1", Region: "fr-par", PublicEndpoint: "https://s3.example.test", AdminSecretRef: "vault://cell", TenantID: "acct_1", BucketName: "data"}}
 	vault := &memoryVault{values: map[string][]byte{"vault://cell": []byte("admin-token")}}
 	cells := &fakeCells{}
-	svc := Service{Repo: repo, Cells: cells, Vault: vault, Now: func() time.Time { return now }}
+	svc := Service{Repo: repo, Cells: cells, Vault: vault, Now: func() time.Time { return now }, PlanQuotas: map[string]int64{"starter": 1 << 30}}
 	token, err := svc.Provision(context.Background(), "account-1", "starter")
 	if err != nil || token == "" {
 		t.Fatalf("token=%q err=%v", token, err)
@@ -141,12 +144,23 @@ func TestProvisionAndRedeemCredentialExactlyOnce(t *testing.T) {
 func TestRedemptionStoresOnlySHA256TokenHash(t *testing.T) {
 	repo := &fakeRepo{r: Reservation{ID: "p", AdminSecretRef: "cell", Status: "ready"}, ready: true, secretRef: "tenant", accessKey: "key"}
 	vault := &memoryVault{values: map[string][]byte{"tenant": []byte("secret")}}
-	svc := Service{Repo: repo, Cells: &fakeCells{}, Vault: vault}
+	svc := Service{Repo: repo, Cells: &fakeCells{}, Vault: vault, PlanQuotas: map[string]int64{"starter": 1 << 30}}
 	token, err := svc.Provision(context.Background(), "a", "starter")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if repo.hash != sha256.Sum256([]byte(token)) {
 		t.Fatal("repository did not receive the token hash")
+	}
+}
+
+func TestProvisionRejectsUnknownPlanBeforeReservation(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := Service{Repo: repo, Cells: &fakeCells{}, Vault: &memoryVault{}}
+	if _, err := svc.Provision(context.Background(), "account-1", "unknown"); err == nil {
+		t.Fatal("expected unknown plan denial")
+	}
+	if repo.r.AccountID != "" {
+		t.Fatal("unknown plan reached repository reservation")
 	}
 }

@@ -18,17 +18,18 @@ var (
 
 type Reservation struct {
 	ID, AccountID, CellID, Region, PublicEndpoint, AdminEndpoint, AdminSecretRef, TenantID, BucketName string
-	Status                                                                                             string
+	Status, PlanCode                                                                                   string
+	QuotaBytes                                                                                         int64
 }
 
 type Credential struct {
 	Endpoint, Region, TenantID, BucketName, AccessKeyID, SecretKey string
 }
 
-type CreatedCredential struct{ AccessKeyID, SecretKey string }
+type ProvisionedCredential struct{ AccessKeyID, SecretRef string }
 
 type Repository interface {
-	Reserve(context.Context, string, string, time.Time) (Reservation, bool, error)
+	Reserve(context.Context, string, string, int64, time.Time) (Reservation, bool, error)
 	Complete(context.Context, string, string, string, time.Time) error
 	Fail(context.Context, string, string, time.Time) error
 	CreateRedemption(context.Context, string, [32]byte, time.Time, time.Time) error
@@ -38,7 +39,7 @@ type Repository interface {
 }
 
 type CellProvisioner interface {
-	Provision(context.Context, Reservation, string) (CreatedCredential, error)
+	Provision(context.Context, Reservation, string, SecretVault) (ProvisionedCredential, error)
 }
 
 type SecretVault interface {
@@ -52,11 +53,16 @@ type Service struct {
 	Vault         SecretVault
 	Now           func() time.Time
 	RedemptionTTL time.Duration
+	PlanQuotas    map[string]int64
 }
 
 func (s Service) Provision(ctx context.Context, accountID, planCode string) (string, error) {
 	now := s.now()
-	r, ready, err := s.Repo.Reserve(ctx, accountID, planCode, now)
+	quota := s.PlanQuotas[planCode]
+	if quota <= 0 {
+		return "", errors.New("unknown or unconfigured hosted plan")
+	}
+	r, ready, err := s.Repo.Reserve(ctx, accountID, planCode, quota, now)
 	if err != nil {
 		return "", err
 	}
@@ -65,17 +71,12 @@ func (s Service) Provision(ctx context.Context, accountID, planCode string) (str
 		if err != nil {
 			return "", fmt.Errorf("load cell credential: %w", err)
 		}
-		created, err := s.Cells.Provision(ctx, r, string(adminToken))
+		created, err := s.Cells.Provision(ctx, r, string(adminToken), s.Vault)
 		if err != nil {
 			_ = s.Repo.Fail(ctx, r.ID, "cell provisioning failed", now)
 			return "", err
 		}
-		secretRef, err := s.Vault.Put(ctx, "tenant/"+r.ID, []byte(created.SecretKey))
-		if err != nil {
-			_ = s.Repo.Fail(ctx, r.ID, "credential vault write failed", now)
-			return "", err
-		}
-		if err := s.Repo.Complete(ctx, r.ID, created.AccessKeyID, secretRef, now); err != nil {
+		if err := s.Repo.Complete(ctx, r.ID, created.AccessKeyID, created.SecretRef, now); err != nil {
 			return "", err
 		}
 	}
