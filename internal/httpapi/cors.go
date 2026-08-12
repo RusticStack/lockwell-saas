@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	allowMethods = "POST, OPTIONS"
+	allowMethods = "GET, POST, OPTIONS"
 	allowHeaders = "Authorization, Content-Type, Idempotency-Key"
 )
 
@@ -29,7 +29,7 @@ func CustomerCORS(origin string, next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
-			if r.Header.Get("Access-Control-Request-Method") != http.MethodPost || !allowedRequestHeaders(r.Header.Get("Access-Control-Request-Headers")) {
+			if !allowedRequestMethod(r.Header.Get("Access-Control-Request-Method")) || !allowedRequestHeaders(r.Header.Get("Access-Control-Request-Headers")) {
 				http.Error(w, "preflight not allowed", http.StatusForbidden)
 				return
 			}
@@ -41,6 +41,10 @@ func CustomerCORS(origin string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func allowedRequestMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodPost
 }
 
 func allowedRequestHeaders(value string) bool {

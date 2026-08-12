@@ -22,6 +22,21 @@ func TestCustomerCORSAllowsExactOriginPreflight(t *testing.T) {
 	}
 }
 
+func TestCustomerCORSAllowsAuthenticatedStatusGET(t *testing.T) {
+	handler := CustomerCORS("https://app.example.test", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("preflight reached application handler")
+	}))
+	request := httptest.NewRequest(http.MethodOptions, "/v1/customer/status", nil)
+	request.Header.Set("Origin", "https://app.example.test")
+	request.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	request.Header.Set("Access-Control-Request-Headers", "authorization")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || response.Header().Get("Access-Control-Allow-Methods") != "GET, POST, OPTIONS" {
+		t.Fatalf("status=%d headers=%v", response.Code, response.Header())
+	}
+}
+
 func TestCustomerCORSRejectsUntrustedOriginAndHeaders(t *testing.T) {
 	for name, values := range map[string][2]string{
 		"origin":  {"https://evil.example", "content-type"},
