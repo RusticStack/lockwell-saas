@@ -78,6 +78,44 @@ func (p Postgres) BindStripeCustomer(ctx context.Context, accountID, customerID 
 	return nil
 }
 
+func (p Postgres) CreateEmailVerification(ctx context.Context, accountID string, hash [32]byte, expiresAt, now time.Time) error {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err = tx.Exec(ctx, `DELETE FROM email_verifications WHERE account_id=$1 AND consumed_at IS NULL`, accountID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO email_verifications(token_hash,account_id,expires_at,created_at) VALUES($1,$2,$3,$4)`, hash[:], accountID, expiresAt, now); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+func (p Postgres) ConsumeEmailVerification(ctx context.Context, hash [32]byte, now time.Time) (accounts.Account, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return accounts.Account{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var account accounts.Account
+	err = tx.QueryRow(ctx, `SELECT a.id::text,a.email::text,a.email_verified_at IS NOT NULL,COALESCE(a.stripe_customer_id,'') FROM email_verifications v JOIN customer_accounts a ON a.id=v.account_id WHERE v.token_hash=$1 AND v.consumed_at IS NULL AND v.expires_at>$2 FOR UPDATE OF v,a`, hash[:], now).Scan(&account.ID, &account.Email, &account.EmailVerified, &account.StripeCustomerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return accounts.Account{}, accounts.ErrInvalidCredentials
+	}
+	if err != nil {
+		return accounts.Account{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE email_verifications SET consumed_at=$2 WHERE token_hash=$1`, hash[:], now); err != nil {
+		return accounts.Account{}, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE customer_accounts SET email_verified_at=COALESCE(email_verified_at,$2),updated_at=$2 WHERE id=$1`, account.ID, now); err != nil {
+		return accounts.Account{}, err
+	}
+	account.EmailVerified = true
+	return account, tx.Commit(ctx)
+}
+
 func (p Postgres) RecordCheckoutSession(ctx context.Context, accountID, planCode string, session billing.CheckoutSession, idempotencyKey string) error {
 	id, err := randomUUID()
 	if err != nil {

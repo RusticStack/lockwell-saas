@@ -37,6 +37,9 @@ func main() {
 	defer pool.Close()
 	repo := store.Postgres{Pool: pool}
 	accountService := accounts.Service{Repo: repo, TermsVersion: cfg.TermsVersion}
+	if cfg.EmailEnabled {
+		accountService.Mailer = accounts.ScalewayMailer{ProjectID: cfg.ScalewayProjectID, Region: "fr-par", AuthToken: cfg.ScalewayAuthToken, FromEmail: cfg.EmailFrom, FromName: cfg.EmailFromName, VerifyURL: cfg.EmailVerificationURL}
+	}
 	accountHTTP := accounts.HTTPHandler{Service: accountService}
 	billingHTTP := billing.HTTPHandler{Service: billing.Service{
 		Accounts: accountService,
@@ -73,6 +76,8 @@ func main() {
 	mux.Handle("POST /webhooks/stripe", billing.WebhookHandler{Secret: cfg.StripeWebhookSecret, ExpectedAPIVersion: cfg.StripeAPIVersion, Recorder: repo})
 	mux.HandleFunc("POST /v1/accounts/signup", accountHTTP.Signup)
 	mux.HandleFunc("POST /v1/accounts/login", accountHTTP.Login)
+	mux.HandleFunc("POST /v1/accounts/verification/request", accountHTTP.RequestVerification)
+	mux.HandleFunc("POST /v1/accounts/verification/confirm", accountHTTP.VerifyEmail)
 	mux.HandleFunc("POST /v1/billing/checkout", billingHTTP.Checkout)
 	mux.HandleFunc("POST /v1/billing/portal", billingHTTP.Portal)
 	if cfg.ProvisioningEnabled {

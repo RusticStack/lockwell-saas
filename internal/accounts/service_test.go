@@ -11,6 +11,7 @@ type memoryRepo struct {
 	account      Account
 	passwordHash string
 	tokenHash    [32]byte
+	verifyHash   [32]byte
 }
 
 func (r *memoryRepo) CreateAccount(_ context.Context, email, passwordHash, _ string, _ time.Time) (Account, error) {
@@ -44,6 +45,24 @@ func (r *memoryRepo) BindStripeCustomer(_ context.Context, _, customerID string)
 	r.account.StripeCustomerID = customerID
 	return nil
 }
+func (r *memoryRepo) CreateEmailVerification(_ context.Context, _ string, hash [32]byte, _, _ time.Time) error {
+	r.verifyHash = hash
+	return nil
+}
+func (r *memoryRepo) ConsumeEmailVerification(_ context.Context, hash [32]byte, _ time.Time) (Account, error) {
+	if hash != r.verifyHash {
+		return Account{}, ErrInvalidCredentials
+	}
+	r.account.EmailVerified = true
+	return r.account, nil
+}
+
+type mailerStub struct{ token string }
+
+func (m *mailerStub) SendVerification(_ context.Context, _, token string) error {
+	m.token = token
+	return nil
+}
 
 func TestServiceSignupLoginAndAuthenticate(t *testing.T) {
 	repo := &memoryRepo{}
@@ -62,6 +81,22 @@ func TestServiceSignupLoginAndAuthenticate(t *testing.T) {
 	authenticated, err := service.Authenticate(context.Background(), loginToken)
 	if err != nil || authenticated.ID != account.ID {
 		t.Fatalf("authenticated = %#v, err = %v", authenticated, err)
+	}
+}
+
+func TestEmailVerificationIsHashedAndSinglePurpose(t *testing.T) {
+	repo := &memoryRepo{account: Account{ID: "acct_1", Email: "user@example.test"}}
+	mailer := &mailerStub{}
+	service := Service{Repo: repo, Mailer: mailer, Now: func() time.Time { return time.Unix(1_700_000_000, 0) }}
+	if err := service.RequestEmailVerification(context.Background(), repo.account); err != nil {
+		t.Fatal(err)
+	}
+	if mailer.token == "" || repo.verifyHash == [32]byte{} {
+		t.Fatal("missing delivered token or stored hash")
+	}
+	account, err := service.VerifyEmail(context.Background(), mailer.token)
+	if err != nil || !account.EmailVerified {
+		t.Fatalf("account=%#v err=%v", account, err)
 	}
 }
 

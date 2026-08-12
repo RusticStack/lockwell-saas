@@ -53,6 +53,13 @@ all of the following are present: `LOCKWELL_SAAS_SCALEWAY_PROJECT_ID`, `LOCKWELL
 `LOCKWELL_SAAS_COMPLIANCE_QUOTA_BYTES`. The admin secret reference must identify an existing secret in the configured
 Scaleway region; the token needs least-privilege access to that secret and the hosted credential path.
 
+Email delivery is independently disabled unless `LOCKWELL_SAAS_EMAIL_ENABLED=true`. Enabling it requires the same
+Scaleway project and IAM token plus `LOCKWELL_SAAS_EMAIL_FROM` from a provider-verified domain and an absolute HTTPS
+`LOCKWELL_SAAS_EMAIL_VERIFICATION_URL`; `LOCKWELL_SAAS_EMAIL_FROM_NAME` is optional. Verification tokens are random,
+expire after one hour, are stored only as SHA-256 digests, and are consumed once. An authenticated user requests a new
+message through `/v1/accounts/verification/request`; the confirmation link submits its token to
+`/v1/accounts/verification/confirm`.
+
 Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
 fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real
 credentials in source, `.env` examples, test fixtures, logs, or pull-request text.

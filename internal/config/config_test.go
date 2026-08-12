@@ -31,3 +31,12 @@ func TestLoadAcceptsCompleteProvisioningConfiguration(t *testing.T) {
 		t.Fatalf("cfg=%#v", cfg)
 	}
 }
+
+func TestLoadRejectsPartialEmailConfiguration(t *testing.T) {
+	setRequiredBase(t)
+	t.Setenv("LOCKWELL_SAAS_EMAIL_ENABLED", "true")
+	t.Setenv("LOCKWELL_SAAS_EMAIL_FROM", "accounts@example.test")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected partial email configuration denial")
+	}
+}
