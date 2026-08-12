@@ -61,9 +61,13 @@ payment failure starts a bounded grace period, cancellation suspends access, sta
 equal-timestamp conflicts use a documented fail-closed priority. Every entitlement change creates a durable downstream
 outbox job for the cell-provisioning/suspension worker.
 
-The cell-provisioning boundary now reserves capacity transactionally, derives a stable tenant identity, and delegates
-idempotent tenant/bucket/key creation through a provider interface. PostgreSQL stores only cell metadata, access-key
-IDs, opaque secret-manager references, and SHA-256 hashes of short-lived redemption tokens; it never stores admin
-tokens or access-key secrets. Redemption is account-bound, expiring, transactionally claimed, and exactly once. This
-contract is not yet mounted as a public route: a production secret-manager adapter, a read-back-verified Lockwell cell
-adapter, and a configured cell inventory must land first so the service cannot expose a nonfunctional provisioning UI.
+The cell-provisioning boundary reserves capacity transactionally, persists the selected plan/quota, and derives a
+stable tenant identity. Its Lockwell adapter creates and reads back the tenant, quota, private default bucket, and
+bucket-scoped data key; the temporary bucket-administration key is revoked after use. Credential delivery is completed
+inside the adapter so a vault failure triggers compensating key revocation. The Scaleway Secret Manager adapter uses
+the regional v1beta1 API, creates protected opaque secrets, writes version data, and reads only `latest_enabled`.
+PostgreSQL stores only cell metadata, access-key IDs, opaque secret references, and SHA-256 hashes of short-lived
+redemption tokens; it never stores admin tokens or access-key secrets. Redemption is account-bound, expiring,
+transactionally claimed, and exactly once. These adapters are not yet mounted as public routes: configured live cell
+inventory, production IAM credentials, entitlement-outbox enforcement, and provider readback must land first so the
+service cannot expose a nonfunctional provisioning UI.

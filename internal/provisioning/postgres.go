@@ -13,22 +13,25 @@ import (
 
 type Postgres struct{ Pool *pgxpool.Pool }
 
-func (p Postgres) Reserve(ctx context.Context, accountID, planCode string, now time.Time) (Reservation, bool, error) {
+func (p Postgres) Reserve(ctx context.Context, accountID, planCode string, quotaBytes int64, now time.Time) (Reservation, bool, error) {
 	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return Reservation{}, false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	var r Reservation
-	err = tx.QueryRow(ctx, `SELECT p.id::text,p.account_id::text,p.cell_id,c.region,c.public_endpoint,c.admin_endpoint,c.admin_secret_ref,p.tenant_id,p.bucket_name,p.status FROM tenant_provisions p JOIN hosting_cells c ON c.id=p.cell_id WHERE p.account_id=$1 FOR UPDATE`, accountID).Scan(&r.ID, &r.AccountID, &r.CellID, &r.Region, &r.PublicEndpoint, &r.AdminEndpoint, &r.AdminSecretRef, &r.TenantID, &r.BucketName, &r.Status)
+	err = tx.QueryRow(ctx, `SELECT p.id::text,p.account_id::text,p.cell_id,c.region,c.public_endpoint,c.admin_endpoint,c.admin_secret_ref,p.tenant_id,p.bucket_name,p.status,p.plan_code,p.quota_bytes FROM tenant_provisions p JOIN hosting_cells c ON c.id=p.cell_id WHERE p.account_id=$1 FOR UPDATE`, accountID).Scan(&r.ID, &r.AccountID, &r.CellID, &r.Region, &r.PublicEndpoint, &r.AdminEndpoint, &r.AdminSecretRef, &r.TenantID, &r.BucketName, &r.Status, &r.PlanCode, &r.QuotaBytes)
 	if err == nil {
+		if r.PlanCode != planCode || r.QuotaBytes != quotaBytes {
+			return Reservation{}, false, errors.New("existing tenant reservation has a different plan")
+		}
 		return r, r.Status == "ready", tx.Commit(ctx)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Reservation{}, false, err
 	}
-	if planCode == "" {
-		return Reservation{}, false, errors.New("plan code is required")
+	if planCode == "" || quotaBytes <= 0 {
+		return Reservation{}, false, errors.New("plan code and positive quota are required")
 	}
 	err = tx.QueryRow(ctx, `SELECT c.id,c.region,c.public_endpoint,c.admin_endpoint,c.admin_secret_ref FROM hosting_cells c WHERE c.status='ready' AND (SELECT count(*) FROM tenant_provisions p WHERE p.cell_id=c.id AND p.status IN ('reserved','ready','suspended')) < c.tenant_capacity ORDER BY (SELECT count(*) FROM tenant_provisions p WHERE p.cell_id=c.id),c.id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&r.CellID, &r.Region, &r.PublicEndpoint, &r.AdminEndpoint, &r.AdminSecretRef)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -45,7 +48,9 @@ func (p Postgres) Reserve(ctx context.Context, accountID, planCode string, now t
 	r.TenantID = "acct_" + accountID
 	r.BucketName = "data"
 	r.Status = "reserved"
-	_, err = tx.Exec(ctx, `INSERT INTO tenant_provisions(id,account_id,cell_id,tenant_id,bucket_name,status,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'reserved',$6,$6)`, r.ID, r.AccountID, r.CellID, r.TenantID, r.BucketName, now)
+	r.PlanCode = planCode
+	r.QuotaBytes = quotaBytes
+	_, err = tx.Exec(ctx, `INSERT INTO tenant_provisions(id,account_id,cell_id,tenant_id,bucket_name,status,plan_code,quota_bytes,created_at,updated_at) VALUES($1,$2,$3,$4,$5,'reserved',$6,$7,$8,$8)`, r.ID, r.AccountID, r.CellID, r.TenantID, r.BucketName, r.PlanCode, r.QuotaBytes, now)
 	if err != nil {
 		return Reservation{}, false, err
 	}
@@ -84,7 +89,7 @@ func (p Postgres) ClaimRedemption(ctx context.Context, accountID string, hash [3
 	defer func() { _ = tx.Rollback(ctx) }()
 	var id, accessKey, secretRef string
 	var r Reservation
-	err = tx.QueryRow(ctx, `SELECT d.id::text,p.id::text,p.account_id::text,p.cell_id,c.region,c.public_endpoint,c.admin_endpoint,c.admin_secret_ref,p.tenant_id,p.bucket_name,p.status,p.access_key_id,p.credential_secret_ref FROM credential_redemptions d JOIN tenant_provisions p ON p.id=d.provision_id JOIN hosting_cells c ON c.id=p.cell_id WHERE d.token_hash=$1 AND p.account_id=$2 AND p.status='ready' AND d.redeemed_at IS NULL AND d.expires_at>$3 AND (d.claim_expires_at IS NULL OR d.claim_expires_at<$3) FOR UPDATE`, hash[:], accountID, now).Scan(&id, &r.ID, &r.AccountID, &r.CellID, &r.Region, &r.PublicEndpoint, &r.AdminEndpoint, &r.AdminSecretRef, &r.TenantID, &r.BucketName, &r.Status, &accessKey, &secretRef)
+	err = tx.QueryRow(ctx, `SELECT d.id::text,p.id::text,p.account_id::text,p.cell_id,c.region,c.public_endpoint,c.admin_endpoint,c.admin_secret_ref,p.tenant_id,p.bucket_name,p.status,p.plan_code,p.quota_bytes,p.access_key_id,p.credential_secret_ref FROM credential_redemptions d JOIN tenant_provisions p ON p.id=d.provision_id JOIN hosting_cells c ON c.id=p.cell_id WHERE d.token_hash=$1 AND p.account_id=$2 AND p.status='ready' AND d.redeemed_at IS NULL AND d.expires_at>$3 AND (d.claim_expires_at IS NULL OR d.claim_expires_at<$3) FOR UPDATE`, hash[:], accountID, now).Scan(&id, &r.ID, &r.AccountID, &r.CellID, &r.Region, &r.PublicEndpoint, &r.AdminEndpoint, &r.AdminSecretRef, &r.TenantID, &r.BucketName, &r.Status, &r.PlanCode, &r.QuotaBytes, &accessKey, &secretRef)
 	if err != nil {
 		return "", Reservation{}, "", "", ErrInvalidRedemption
 	}

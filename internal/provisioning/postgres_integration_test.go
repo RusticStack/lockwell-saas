@@ -45,7 +45,7 @@ func TestPostgresProvisionAndExactlyOnceRedemption(t *testing.T) {
 	vault := &memoryVault{values: map[string][]byte{"vault://cell": []byte("admin")}}
 	cells := &fakeCells{}
 	now := time.Now().UTC().Truncate(time.Second)
-	service := Service{Repo: repo, Cells: cells, Vault: vault, Now: func() time.Time { return now }}
+	service := Service{Repo: repo, Cells: cells, Vault: vault, Now: func() time.Time { return now }, PlanQuotas: map[string]int64{"starter": 1 << 30}}
 	token, err := service.Provision(ctx, accountID, "starter")
 	if err != nil {
 		t.Fatal(err)
