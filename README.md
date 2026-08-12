@@ -14,6 +14,10 @@ seller-of-record, VAT/OSS, invoicing, product-catalog, and operating-policy deci
   in the same database transaction.
 - `/healthz` is liveness only; `/readyz` proves database reachability.
 - No Checkout redirect grants entitlement. Workers will reconcile authoritative Stripe objects before provisioning.
+- Invoice lifecycle and refund webhooks enqueue a separate bounded accounting job. It retrieves the authoritative
+  Invoice, all paginated line items, and Refund plus Charge before transactionally projecting financial state.
+- Financial projections validate Stripe customer/subscription binding, lease jobs, retry with a bounded policy, and
+  dead-letter persistent failures. `invoice.paid` is complete only after entitlement and accounting both reconcile.
 - Secrets are environment references for development only; production deployment must inject them from a secret
   manager.
 

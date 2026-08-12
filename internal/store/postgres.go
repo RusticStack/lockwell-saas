@@ -319,20 +319,27 @@ func (p Postgres) RecordStripeEvent(ctx context.Context, event billing.StripeEve
 		}
 		return false, tx.Commit(ctx)
 	}
-	topic := stripeEventTopic(event.Type)
-	if topic == "" {
+	topics := stripeEventTopics(event.Type)
+	if len(topics) == 0 {
 		return true, tx.Commit(ctx)
 	}
 	jobPayload, err := json.Marshal(map[string]string{"stripe_event_id": event.ID, "event_type": event.Type})
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO control_plane_outbox
-			(id, topic, aggregate_id, idempotency_key, payload_json)
-			VALUES ($1, $2, $3, $4, $5)`, outboxID, topic, event.ID, "stripe-event:"+event.ID, jobPayload)
-	if err != nil {
-		return false, err
+	for index, topic := range topics {
+		jobID := outboxID
+		idempotencyKey := "stripe-event:" + event.ID
+		if index > 0 || topic != "stripe.event.received" {
+			jobID, err = randomUUID()
+			if err != nil {
+				return false, err
+			}
+			idempotencyKey = topic + ":" + event.ID
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO control_plane_outbox (id, topic, aggregate_id, idempotency_key, payload_json) VALUES ($1, $2, $3, $4, $5)`, jobID, topic, event.ID, idempotencyKey, jobPayload); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit(ctx)
 }
@@ -451,7 +458,7 @@ func (p Postgres) ApplySubscriptionProjection(ctx context.Context, outboxID stri
 	if _, err := tx.Exec(ctx, `UPDATE control_plane_outbox SET completed_at=now(),claimed_at=NULL,last_error=NULL WHERE id=$1`, outboxID); err != nil {
 		return false, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE stripe_event_inbox SET processed_at=now(),processing_error=NULL WHERE event_id=$1`, projection.Event.ID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE stripe_event_inbox i SET processed_at=now(),processing_error=NULL WHERE i.event_id=$1 AND NOT EXISTS(SELECT 1 FROM control_plane_outbox o WHERE o.aggregate_id=i.event_id AND o.completed_at IS NULL AND o.dead_lettered_at IS NULL)`, projection.Event.ID); err != nil {
 		return false, err
 	}
 	return mutated, tx.Commit(ctx)
@@ -495,14 +502,18 @@ func (p Postgres) SuspendExpiredGrace(ctx context.Context, now time.Time) (strin
 	return subscriptionID, true, tx.Commit(ctx)
 }
 
-func stripeEventTopic(eventType string) string {
+func stripeEventTopics(eventType string) []string {
 	switch eventType {
-	case "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed":
-		return "stripe.event.received"
+	case "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "invoice.payment_failed":
+		return []string{"stripe.event.received"}
+	case "invoice.paid":
+		return []string{"stripe.event.received", "billing.reconcile"}
+	case "invoice.finalized", "invoice.voided", "invoice.marked_uncollectible", "refund.created", "refund.updated", "refund.failed":
+		return []string{"billing.reconcile"}
 	case "invoice.finalization_failed", "invoice.payment_action_required":
-		return "billing.alert"
+		return []string{"billing.alert"}
 	default:
-		return ""
+		return nil
 	}
 }
 
