@@ -88,6 +88,7 @@ func main() {
 		}
 		vault := provisioning.ScalewayVault{ProjectID: cfg.ScalewayProjectID, Region: cfg.ScalewayRegion, AuthToken: cfg.ScalewayAuthToken}
 		provisionHTTP := provisioning.HTTPHandler{Accounts: accountService, Service: provisioning.Service{Repo: provisionRepo, Cells: provisioning.LockwellCell{}, Vault: vault, PlanQuotas: map[string]int64{"starter": cfg.StarterQuotaBytes, "team": cfg.TeamQuotaBytes, "compliance": cfg.ComplianceQuotaBytes}}}
+		go runEnforcementWorker(ctx, logger, provisioning.EnforcementWorker{Repo: provisionRepo, Vault: vault, Cells: provisioning.LockwellCell{}})
 		mux.HandleFunc("POST /v1/provisioning/credentials", provisionHTTP.RequestCredential)
 		mux.HandleFunc("POST /v1/provisioning/redeem", provisionHTTP.RedeemCredential)
 	}
@@ -110,6 +111,25 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("serve", "error", err)
 		os.Exit(1)
+	}
+}
+
+func runEnforcementWorker(ctx context.Context, logger *slog.Logger, worker provisioning.EnforcementWorker) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		processed, err := worker.RunOnce(ctx)
+		if err != nil {
+			logger.Warn("cell entitlement enforcement pending", "error", err)
+		}
+		if processed {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
