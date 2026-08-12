@@ -155,7 +155,8 @@ func TestPostgresCustomerStatusIsAccountScoped(t *testing.T) {
 	if _, err = pool.Exec(ctx, `INSERT INTO hosted_subscriptions(stripe_subscription_id,account_id,stripe_customer_id,plan_code,stripe_price_id,stripe_status,entitlement_status,last_stripe_event_created,last_stripe_event_priority,last_stripe_event_id)VALUES($1,$2,$3,'team','price_team','active','active',now(),1,'seed')`, "sub_status_"+accountID, accountID, "cus_"+accountID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `INSERT INTO usage_rollups(id,account_id,metric,window_start,window_end,value,source_revision,source_digest)VALUES($1,$2,'operations',$3,$4,42,'rev',digest('status','sha256'))`, mustRandomUUID(t), accountID, now.Add(-time.Hour), now); err != nil {
+	sourceDigest := sha256.Sum256([]byte("status"))
+	if _, err = pool.Exec(ctx, `INSERT INTO usage_rollups(id,account_id,metric,window_start,window_end,value,source_revision,source_digest)VALUES($1,$2,'operations',$3,$4,42,'rev',$5)`, mustRandomUUID(t), accountID, now.Add(-time.Hour), now, sourceDigest[:]); err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range []struct{ invoice, account string }{{invoiceID, accountID}, {otherInvoiceID, otherAccountID}} {
