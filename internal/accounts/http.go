@@ -37,6 +37,35 @@ func (h HTTPHandler) Login(w http.ResponseWriter, r *http.Request) {
 	h.writeAuthResult(w, account, token, err, http.StatusOK)
 }
 
+func (h HTTPHandler) RequestVerification(w http.ResponseWriter, r *http.Request) {
+	account, err := h.Service.Authenticate(r.Context(), BearerToken(r))
+	if err != nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if err = h.Service.RequestEmailVerification(r.Context(), account); err != nil {
+		http.Error(w, "verification unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+func (h HTTPHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Token string `json:"token"`
+	}
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	account, err := h.Service.VerifyEmail(r.Context(), strings.TrimSpace(request.Token))
+	if err != nil {
+		http.Error(w, "invalid or expired verification", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{"account_id": account.ID, "email": account.Email, "email_verified": true})
+}
+
 func (h HTTPHandler) writeAuthResult(w http.ResponseWriter, account Account, token string, err error, status int) {
 	if err != nil {
 		code := http.StatusBadRequest

@@ -13,6 +13,7 @@ type Service struct {
 	Repo         Repository
 	TermsVersion string
 	Now          func() time.Time
+	Mailer       VerificationMailer
 }
 
 func (s Service) Signup(ctx context.Context, email, password, acceptedTerms string) (Account, string, error) {
@@ -70,6 +71,33 @@ func (s Service) Authenticate(ctx context.Context, token string) (Account, error
 		return Account{}, ErrInvalidCredentials
 	}
 	return s.Repo.AccountBySession(ctx, sha256.Sum256([]byte(token)), s.now())
+}
+
+func (s Service) RequestEmailVerification(ctx context.Context, account Account) error {
+	if account.ID == "" || account.Email == "" {
+		return ErrInvalidCredentials
+	}
+	if account.EmailVerified {
+		return nil
+	}
+	if s.Mailer == nil {
+		return errors.New("email verification delivery is not configured")
+	}
+	token, hash, err := NewSessionToken()
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	if err = s.Repo.CreateEmailVerification(ctx, account.ID, hash, now.Add(time.Hour), now); err != nil {
+		return err
+	}
+	return s.Mailer.SendVerification(ctx, account.Email, token)
+}
+func (s Service) VerifyEmail(ctx context.Context, token string) (Account, error) {
+	if token == "" {
+		return Account{}, ErrInvalidCredentials
+	}
+	return s.Repo.ConsumeEmailVerification(ctx, sha256.Sum256([]byte(token)), s.now())
 }
 
 func (s Service) now() time.Time {

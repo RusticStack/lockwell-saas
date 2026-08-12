@@ -35,6 +35,10 @@ type Config struct {
 	StarterQuotaBytes         int64
 	TeamQuotaBytes            int64
 	ComplianceQuotaBytes      int64
+	EmailEnabled              bool
+	EmailFrom                 string
+	EmailFromName             string
+	EmailVerificationURL      string
 }
 
 func Load() (Config, error) {
@@ -61,8 +65,12 @@ func Load() (Config, error) {
 		CellPublicEndpoint:        strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_PUBLIC_ENDPOINT")),
 		CellAdminEndpoint:         strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_ADMIN_ENDPOINT")),
 		CellAdminSecretRef:        strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_ADMIN_SECRET_REF")),
+		EmailFrom:                 strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_FROM")),
+		EmailFromName:             strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_FROM_NAME")),
+		EmailVerificationURL:      strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_VERIFICATION_URL")),
 	}
 	cfg.ProvisioningEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PROVISIONING_ENABLED")))
+	cfg.EmailEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_ENABLED")))
 	cfg.CellCapacity, _ = strconv.Atoi(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_CAPACITY")))
 	cfg.StarterQuotaBytes, _ = strconv.ParseInt(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STARTER_QUOTA_BYTES")), 10, 64)
 	cfg.TeamQuotaBytes, _ = strconv.ParseInt(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_TEAM_QUOTA_BYTES")), 10, 64)
@@ -87,6 +95,9 @@ func Load() (Config, error) {
 	}
 	if cfg.ProvisioningEnabled && (cfg.ScalewayProjectID == "" || cfg.ScalewayRegion == "" || cfg.ScalewayAuthToken == "" || cfg.CellID == "" || cfg.CellPublicEndpoint == "" || cfg.CellAdminEndpoint == "" || cfg.CellAdminSecretRef == "" || cfg.CellCapacity <= 0 || cfg.StarterQuotaBytes <= 0 || cfg.TeamQuotaBytes <= 0 || cfg.ComplianceQuotaBytes <= 0) {
 		return Config{}, errors.New("enabled provisioning requires complete Scaleway, cell, capacity, and positive plan-quota configuration")
+	}
+	if cfg.EmailEnabled && (cfg.ScalewayProjectID == "" || cfg.ScalewayAuthToken == "" || cfg.EmailFrom == "" || cfg.EmailVerificationURL == "") {
+		return Config{}, errors.New("enabled email verification requires Scaleway project/auth, sender, and verification URL")
 	}
 	return cfg, nil
 }

@@ -32,6 +32,12 @@ func (r *billingRepo) BindStripeCustomer(_ context.Context, _, customerID string
 	r.account.StripeCustomerID = customerID
 	return nil
 }
+func (*billingRepo) CreateEmailVerification(context.Context, string, [32]byte, time.Time, time.Time) error {
+	return errors.New("unused")
+}
+func (*billingRepo) ConsumeEmailVerification(context.Context, [32]byte, time.Time) (accounts.Account, error) {
+	return accounts.Account{}, errors.New("unused")
+}
 func (r *billingRepo) RecordCheckoutSession(_ context.Context, _, _ string, session CheckoutSession, _ string) error {
 	r.recorded = session
 	return nil

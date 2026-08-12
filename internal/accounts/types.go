@@ -29,6 +29,12 @@ type Repository interface {
 	CreateSession(context.Context, string, [32]byte, time.Time) error
 	AccountBySession(context.Context, [32]byte, time.Time) (Account, error)
 	BindStripeCustomer(context.Context, string, string) error
+	CreateEmailVerification(context.Context, string, [32]byte, time.Time, time.Time) error
+	ConsumeEmailVerification(context.Context, [32]byte, time.Time) (Account, error)
+}
+
+type VerificationMailer interface {
+	SendVerification(context.Context, string, string) error
 }
 
 func NormalizeEmail(value string) (string, error) {
