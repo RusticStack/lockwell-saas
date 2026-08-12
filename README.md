@@ -60,6 +60,24 @@ Required environment:
 | `LOCKWELL_SAAS_LISTEN_ADDR` | Optional listener; defaults to `127.0.0.1:8080` |
 | `LOCKWELL_SAAS_CUSTOMER_ORIGIN` | Optional exact HTTP(S) origin allowed to call `/v1/` from a browser |
 
+## Stripe test-mode readiness
+
+Before starting a live customer-flow drill, set the service's Stripe variables plus
+`LOCKWELL_SAAS_STRIPE_PORTAL_CONFIG_ID`, `LOCKWELL_SAAS_STRIPE_WEBHOOK_ENDPOINT_ID`, and the exact public
+`LOCKWELL_SAAS_STRIPE_WEBHOOK_URL`, then run:
+
+```powershell
+go run ./cmd/stripe-readiness
+```
+
+The read-only verifier accepts only an `sk_test_` key and fails closed unless all three allowlisted Prices are distinct,
+active monthly EUR recurring Prices; all three Meters are distinct, active, test-mode `sum` meters with the configured
+event identity and payload mapping; the Portal configuration is active; and the exact enabled webhook endpoint is
+test-mode, pinned to the configured API version and URL, and subscribes to every event the entitlement and financial
+workers consume. Successful output is a redacted JSON inventory containing object IDs and status only. It is a
+precondition check, not evidence that Checkout, Portal, Meter delivery, invoice/refund reconciliation, Tax, or
+provisioning completed end to end.
+
 Provisioning is disabled unless `LOCKWELL_SAAS_PROVISIONING_ENABLED=true`. When enabled, startup fails closed unless
 all of the following are present: `LOCKWELL_SAAS_SCALEWAY_PROJECT_ID`, `LOCKWELL_SAAS_SCALEWAY_REGION`,
 `LOCKWELL_SAAS_SCALEWAY_AUTH_TOKEN`, `LOCKWELL_SAAS_CELL_ID`, `LOCKWELL_SAAS_CELL_PUBLIC_ENDPOINT`,
