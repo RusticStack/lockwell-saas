@@ -11,6 +11,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/billing"
 	"github.com/RusticStack/lockwell-saas/internal/entitlements"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
+	"github.com/RusticStack/lockwell-saas/internal/usageingest"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -185,6 +186,82 @@ func (p Postgres) AppendRollup(ctx context.Context, rollup metering.Rollup, mete
 		return metering.Export{}, false, err
 	}
 	return metering.Export{ID: exportID, RollupID: rollup.ID, StripeCustomerID: rollup.StripeCustomerID, EventName: meter.EventName, MeterID: meter.MeterID, Identifier: identifier, WindowStart: rollup.WindowStart, WindowEnd: rollup.WindowEnd, Value: rollup.Value}, created, nil
+}
+
+func (p Postgres) AppendUsageWindow(ctx context.Context, window usageingest.Window, digest [32]byte, meters map[metering.Metric]metering.MeterConfig) (bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var accountID, customerID string
+	err = tx.QueryRow(ctx, `
+		SELECT p.account_id::text, COALESCE(a.stripe_customer_id, '')
+		FROM tenant_provisions p JOIN customer_accounts a ON a.id=p.account_id
+		WHERE p.cell_id=$1 AND p.tenant_id=$2 AND p.status IN ('ready','suspended')
+		FOR UPDATE`, window.CellID, window.TenantID).Scan(&accountID, &customerID)
+	if err != nil {
+		return false, errors.New("usage source is not bound to a serving tenant provision")
+	}
+	if customerID == "" {
+		return false, errors.New("usage account has no Stripe customer binding")
+	}
+	windowID, err := randomUUID()
+	if err != nil {
+		return false, err
+	}
+	command, err := tx.Exec(ctx, `
+		INSERT INTO usage_windows
+			(id,cell_id,tenant_id,account_id,window_start,window_end,source_revision,source_digest,storage_mib_hours,operations,egress_mib)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		ON CONFLICT (cell_id,tenant_id,window_start,window_end,source_revision) DO NOTHING`,
+		windowID, window.CellID, window.TenantID, accountID, window.WindowStart, window.WindowEnd, window.SourceRevision, digest[:], window.StorageMiBHours, window.Operations, window.EgressMiB)
+	if err != nil {
+		return false, err
+	}
+	if command.RowsAffected() == 0 {
+		var existing []byte
+		if err := tx.QueryRow(ctx, `SELECT source_digest FROM usage_windows WHERE cell_id=$1 AND tenant_id=$2 AND window_start=$3 AND window_end=$4 AND source_revision=$5`,
+			window.CellID, window.TenantID, window.WindowStart, window.WindowEnd, window.SourceRevision).Scan(&existing); err != nil {
+			return false, err
+		}
+		if !bytes.Equal(existing, digest[:]) {
+			return false, errors.New("usage revision replayed with different evidence")
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	values := map[metering.Metric]int64{
+		metering.StorageMiBHours: window.StorageMiBHours,
+		metering.Operations:      window.Operations,
+		metering.EgressMiB:       window.EgressMiB,
+	}
+	for _, metric := range []metering.Metric{metering.StorageMiBHours, metering.Operations, metering.EgressMiB} {
+		meter := meters[metric]
+		rollup, err := metering.NewRollup(accountID, customerID, metric, window.WindowStart, window.WindowEnd, values[metric], window.SourceRevision, digest[:])
+		if err != nil {
+			return false, err
+		}
+		rollup.SourceDigest = digest
+		exportID, err := randomUUID()
+		if err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO usage_rollups (id,account_id,metric,window_start,window_end,value,source_revision,source_digest) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+			rollup.ID, accountID, metric, window.WindowStart, window.WindowEnd, rollup.Value, window.SourceRevision, digest[:]); err != nil {
+			return false, err
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO stripe_meter_exports (id,usage_rollup_id,stripe_customer_id,meter_event_name,stripe_meter_id,stripe_identifier) VALUES ($1,$2,$3,$4,$5,$6)`,
+			exportID, rollup.ID, customerID, meter.EventName, meter.MeterID, metering.Identifier(rollup)); err != nil {
+			return false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (p Postgres) ClaimNextExport(ctx context.Context, now time.Time) (metering.Export, bool, error) {

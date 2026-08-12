@@ -21,6 +21,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/operations"
 	"github.com/RusticStack/lockwell-saas/internal/provisioning"
 	"github.com/RusticStack/lockwell-saas/internal/store"
+	"github.com/RusticStack/lockwell-saas/internal/usageingest"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -79,6 +80,12 @@ func main() {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.Handle("GET /metrics", operations.MetricsHandler{Repo: repo, Token: cfg.MetricsToken})
+	usageService := usageingest.Service{Repo: repo, Meters: map[metering.Metric]metering.MeterConfig{
+		metering.StorageMiBHours: {EventName: cfg.StripeStorageEventName, MeterID: cfg.StripeStorageMeterID},
+		metering.Operations:      {EventName: cfg.StripeOperationsEventName, MeterID: cfg.StripeOperationsMeterID},
+		metering.EgressMiB:       {EventName: cfg.StripeEgressEventName, MeterID: cfg.StripeEgressMeterID},
+	}}
+	mux.HandleFunc("POST /internal/v1/usage-windows", usageingest.HTTPHandler{Service: usageService, Token: cfg.UsageIngestToken}.Record)
 	mux.Handle("POST /webhooks/stripe", billing.WebhookHandler{Secret: cfg.StripeWebhookSecret, ExpectedAPIVersion: cfg.StripeAPIVersion, Recorder: repo})
 	mux.HandleFunc("POST /v1/accounts/signup", accountHTTP.Signup)
 	mux.HandleFunc("POST /v1/accounts/login", accountHTTP.Login)
