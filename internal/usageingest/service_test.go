@@ -62,3 +62,11 @@ func TestRecordRejectsTamperingAndBadWindows(t *testing.T) {
 		})
 	}
 }
+
+func TestDigestMatchesCellProducerContractVector(t *testing.T) {
+	window := testWindow()
+	const want = "022d2cfd3b16148a22a338bf1967b4672cc51cbe539eb8f1332c47e3f29cb58c"
+	if window.SourceDigest != want {
+		t.Fatalf("digest = %s, want shared cell contract vector %s", window.SourceDigest, want)
+	}
+}
