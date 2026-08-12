@@ -36,6 +36,9 @@ Required environment:
 | `LOCKWELL_SAAS_STRIPE_STARTER_PRICE` | Server-side allowlisted recurring Starter Price ID |
 | `LOCKWELL_SAAS_STRIPE_TEAM_PRICE` | Server-side allowlisted recurring Team Price ID |
 | `LOCKWELL_SAAS_STRIPE_COMPLIANCE_PRICE` | Server-side allowlisted recurring Compliance Price ID |
+| `LOCKWELL_SAAS_STRIPE_STORAGE_EVENT_NAME` | Approved storage MiB-hour meter event name |
+| `LOCKWELL_SAAS_STRIPE_OPERATIONS_EVENT_NAME` | Approved successful-operation meter event name |
+| `LOCKWELL_SAAS_STRIPE_EGRESS_EVENT_NAME` | Approved delivered-egress MiB meter event name |
 | `LOCKWELL_SAAS_CHECKOUT_SUCCESS_URL` | Post-Checkout UI URL; never treated as entitlement proof |
 | `LOCKWELL_SAAS_CHECKOUT_CANCEL_URL` | Checkout cancellation UI URL |
 | `LOCKWELL_SAAS_PORTAL_RETURN_URL` | Customer Portal return URL |
@@ -45,3 +48,8 @@ Required environment:
 Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
 fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real
 credentials in source, `.env` examples, test fixtures, logs, or pull-request text.
+
+Usage metering accepts only trusted, immutable rollups from future cell collectors. Each rollup creates a deterministic
+Stripe Meter Event identifier and a transactional export row. Workers use bounded retries, reclaim abandoned claims,
+dead-letter repeated delivery failures, and compare Stripe's asynchronous meter summary with the internal aggregate
+before marking a window reconciled. Customer-facing requests cannot submit or alter billable usage.

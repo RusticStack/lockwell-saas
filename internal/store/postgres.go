@@ -9,6 +9,7 @@ import (
 
 	"github.com/RusticStack/lockwell-saas/internal/accounts"
 	"github.com/RusticStack/lockwell-saas/internal/billing"
+	"github.com/RusticStack/lockwell-saas/internal/metering"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -91,6 +92,168 @@ func (p Postgres) RecordCheckoutSession(ctx context.Context, accountID, planCode
 
 func randomUUID() (string, error) {
 	return billing.RandomID()
+}
+
+func (p Postgres) AppendRollup(ctx context.Context, rollup metering.Rollup, meter metering.MeterConfig) (metering.Export, bool, error) {
+	if meter.EventName == "" || meter.MeterID == "" {
+		return metering.Export{}, false, errors.New("meter event name and ID are required")
+	}
+	exportID, err := randomUUID()
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	identifier := metering.Identifier(rollup)
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	command, err := tx.Exec(ctx, `
+		INSERT INTO usage_rollups
+			(id, account_id, metric, window_start, window_end, value, source_revision, source_digest)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (account_id, metric, window_start, window_end, source_revision) DO NOTHING`,
+		rollup.ID, rollup.AccountID, rollup.Metric, rollup.WindowStart, rollup.WindowEnd, rollup.Value, rollup.SourceRevision, rollup.SourceDigest[:])
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	created := command.RowsAffected() == 1
+	if created {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO stripe_meter_exports
+				(id, usage_rollup_id, stripe_customer_id, meter_event_name, stripe_meter_id, stripe_identifier)
+			VALUES ($1, $2, $3, $4, $5, $6)`, exportID, rollup.ID, rollup.StripeCustomerID, meter.EventName, meter.MeterID, identifier)
+		if err != nil {
+			return metering.Export{}, false, err
+		}
+	} else {
+		var existingDigest []byte
+		err = tx.QueryRow(ctx, `
+			SELECT r.id::text, r.source_digest, e.id::text, e.stripe_identifier,
+			       e.stripe_customer_id, e.meter_event_name, e.stripe_meter_id, r.window_end, r.value
+			FROM usage_rollups r JOIN stripe_meter_exports e ON e.usage_rollup_id = r.id
+			WHERE r.account_id=$1 AND r.metric=$2 AND r.window_start=$3 AND r.window_end=$4 AND r.source_revision=$5`,
+			rollup.AccountID, rollup.Metric, rollup.WindowStart, rollup.WindowEnd, rollup.SourceRevision).
+			Scan(&rollup.ID, &existingDigest, &exportID, &identifier, &rollup.StripeCustomerID, &meter.EventName, &meter.MeterID, &rollup.WindowEnd, &rollup.Value)
+		if err != nil {
+			return metering.Export{}, false, err
+		}
+		if !bytes.Equal(existingDigest, rollup.SourceDigest[:]) {
+			return metering.Export{}, false, errors.New("usage revision replayed with different evidence")
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return metering.Export{}, false, err
+	}
+	return metering.Export{ID: exportID, RollupID: rollup.ID, StripeCustomerID: rollup.StripeCustomerID, EventName: meter.EventName, MeterID: meter.MeterID, Identifier: identifier, WindowStart: rollup.WindowStart, WindowEnd: rollup.WindowEnd, Value: rollup.Value}, created, nil
+}
+
+func (p Postgres) ClaimNextExport(ctx context.Context, now time.Time) (metering.Export, bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var export metering.Export
+	err = tx.QueryRow(ctx, `
+		SELECT e.id::text, e.usage_rollup_id::text, e.stripe_customer_id, e.meter_event_name,
+		       e.stripe_meter_id, e.stripe_identifier, r.window_start, r.window_end, r.value, e.attempts + 1
+		FROM stripe_meter_exports e JOIN usage_rollups r ON r.id = e.usage_rollup_id
+		WHERE (e.status = 'pending' AND e.available_at <= $1)
+		   OR (e.status = 'sending' AND e.claimed_at < $2)
+		ORDER BY e.available_at, e.created_at
+		FOR UPDATE OF e SKIP LOCKED LIMIT 1`, now, now.Add(-5*time.Minute)).Scan(&export.ID, &export.RollupID, &export.StripeCustomerID, &export.EventName, &export.MeterID, &export.Identifier, &export.WindowStart, &export.WindowEnd, &export.Value, &export.Attempts)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return metering.Export{}, false, nil
+	}
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	_, err = tx.Exec(ctx, `UPDATE stripe_meter_exports SET status='sending', attempts=$2, claimed_at=$3 WHERE id=$1`, export.ID, export.Attempts, now)
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	return export, true, tx.Commit(ctx)
+}
+
+func (p Postgres) MarkExportSent(ctx context.Context, exportID string, sentAt time.Time) error {
+	command, err := p.Pool.Exec(ctx, `UPDATE stripe_meter_exports SET status='sent', sent_at=$2, available_at=$3, last_error=NULL WHERE id=$1 AND status='sending'`, exportID, sentAt, sentAt.Add(time.Minute))
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("meter export is not claimed")
+	}
+	return nil
+}
+
+func (p Postgres) MarkExportFailed(ctx context.Context, exportID string, retryAt time.Time, message string, deadLetter bool) error {
+	status := "pending"
+	if deadLetter {
+		status = "dead_letter"
+	}
+	command, err := p.Pool.Exec(ctx, `UPDATE stripe_meter_exports SET status=$2, available_at=$3, last_error=$4 WHERE id=$1 AND status='sending'`, exportID, status, retryAt, message)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("meter export is not claimed")
+	}
+	return nil
+}
+
+func (p Postgres) ClaimNextReconciliation(ctx context.Context, now time.Time) (metering.Export, bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var export metering.Export
+	err = tx.QueryRow(ctx, `
+		SELECT e.id::text, e.usage_rollup_id::text, e.stripe_customer_id, e.meter_event_name,
+		       e.stripe_meter_id, e.stripe_identifier, r.window_start, r.window_end, r.value, e.attempts,
+		       (SELECT COALESCE(SUM(r2.value), 0)
+		          FROM usage_rollups r2 JOIN stripe_meter_exports e2 ON e2.usage_rollup_id=r2.id
+		         WHERE e2.stripe_customer_id=e.stripe_customer_id AND e2.stripe_meter_id=e.stripe_meter_id
+		           AND r2.window_start=r.window_start AND r2.window_end=r.window_end
+		           AND e2.status IN ('sent','reconciling','reconciled'))
+		FROM stripe_meter_exports e JOIN usage_rollups r ON r.id=e.usage_rollup_id
+		WHERE (e.status='sent' AND e.available_at <= $1)
+		   OR (e.status='reconciling' AND e.claimed_at < $2)
+		ORDER BY e.available_at, e.created_at
+		FOR UPDATE OF e SKIP LOCKED LIMIT 1`, now, now.Add(-5*time.Minute)).Scan(&export.ID, &export.RollupID, &export.StripeCustomerID, &export.EventName, &export.MeterID, &export.Identifier, &export.WindowStart, &export.WindowEnd, &export.Value, &export.Attempts, &export.ExpectedAggregate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return metering.Export{}, false, nil
+	}
+	if err != nil {
+		return metering.Export{}, false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE stripe_meter_exports SET status='reconciling', claimed_at=$2 WHERE id=$1`, export.ID, now); err != nil {
+		return metering.Export{}, false, err
+	}
+	return export, true, tx.Commit(ctx)
+}
+
+func (p Postgres) MarkReconciled(ctx context.Context, exportID string, aggregated int64, at time.Time) error {
+	command, err := p.Pool.Exec(ctx, `UPDATE stripe_meter_exports SET status='reconciled', stripe_aggregated_value=$2, reconciled_at=$3, last_error=NULL WHERE id=$1 AND status='reconciling'`, exportID, aggregated, at)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("meter reconciliation is not claimed")
+	}
+	return nil
+}
+
+func (p Postgres) MarkReconciliationPending(ctx context.Context, exportID string, retryAt time.Time, message string) error {
+	command, err := p.Pool.Exec(ctx, `UPDATE stripe_meter_exports SET status='sent', available_at=$2, last_error=$3 WHERE id=$1 AND status='reconciling'`, exportID, retryAt, message)
+	if err != nil {
+		return err
+	}
+	if command.RowsAffected() != 1 {
+		return errors.New("meter reconciliation is not claimed")
+	}
+	return nil
 }
 
 func (p Postgres) RecordStripeEvent(ctx context.Context, event billing.StripeEvent, payload []byte, digest [32]byte, outboxID string) (bool, error) {

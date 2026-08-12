@@ -11,12 +11,39 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      LOCKWELL_TEST_DATABASE_URL: postgres://lockwell:test-only-password@127.0.0.1:5432/lockwell_saas_test?sslmode=disable
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: lockwell
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: lockwell_saas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lockwell -d lockwell_saas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+      - name: Validate migrations against PostgreSQL
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGUSER: lockwell
+          PGPASSWORD: test-only-password
+          PGDATABASE: lockwell_saas_test
+        run: |
+          for migration in migrations/*.sql; do
+            psql --set ON_ERROR_STOP=1 --file "$migration"
+          done
       - run: go test ./... -count=1
       - run: go test -race ./... -count=1
       - run: go vet ./...
