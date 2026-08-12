@@ -57,6 +57,13 @@ type fakeRepo struct {
 	claimed, redeemed    bool
 }
 
+func (f *fakeRepo) EntitledPlan(context.Context, string, time.Time) (string, error) {
+	if f.r.PlanCode != "" {
+		return f.r.PlanCode, nil
+	}
+	return "starter", nil
+}
+
 func (f *fakeRepo) Reserve(_ context.Context, account, plan string, quota int64, _ time.Time) (Reservation, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -116,7 +123,7 @@ func TestProvisionAndRedeemCredentialExactlyOnce(t *testing.T) {
 	vault := &memoryVault{values: map[string][]byte{"vault://cell": []byte("admin-token")}}
 	cells := &fakeCells{}
 	svc := Service{Repo: repo, Cells: cells, Vault: vault, Now: func() time.Time { return now }, PlanQuotas: map[string]int64{"starter": 1 << 30}}
-	token, err := svc.Provision(context.Background(), "account-1", "starter")
+	token, err := svc.Provision(context.Background(), "account-1")
 	if err != nil || token == "" {
 		t.Fatalf("token=%q err=%v", token, err)
 	}
@@ -145,7 +152,7 @@ func TestRedemptionStoresOnlySHA256TokenHash(t *testing.T) {
 	repo := &fakeRepo{r: Reservation{ID: "p", AdminSecretRef: "cell", Status: "ready"}, ready: true, secretRef: "tenant", accessKey: "key"}
 	vault := &memoryVault{values: map[string][]byte{"tenant": []byte("secret")}}
 	svc := Service{Repo: repo, Cells: &fakeCells{}, Vault: vault, PlanQuotas: map[string]int64{"starter": 1 << 30}}
-	token, err := svc.Provision(context.Background(), "a", "starter")
+	token, err := svc.Provision(context.Background(), "a")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,9 +162,9 @@ func TestRedemptionStoresOnlySHA256TokenHash(t *testing.T) {
 }
 
 func TestProvisionRejectsUnknownPlanBeforeReservation(t *testing.T) {
-	repo := &fakeRepo{}
+	repo := &fakeRepo{r: Reservation{PlanCode: "unknown"}}
 	svc := Service{Repo: repo, Cells: &fakeCells{}, Vault: &memoryVault{}}
-	if _, err := svc.Provision(context.Background(), "account-1", "unknown"); err == nil {
+	if _, err := svc.Provision(context.Background(), "account-1"); err == nil {
 		t.Fatal("expected unknown plan denial")
 	}
 	if repo.r.AccountID != "" {

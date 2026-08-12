@@ -29,6 +29,7 @@ type Credential struct {
 type ProvisionedCredential struct{ AccessKeyID, SecretRef string }
 
 type Repository interface {
+	EntitledPlan(context.Context, string, time.Time) (string, error)
 	Reserve(context.Context, string, string, int64, time.Time) (Reservation, bool, error)
 	Complete(context.Context, string, string, string, time.Time) error
 	Fail(context.Context, string, string, time.Time) error
@@ -56,8 +57,12 @@ type Service struct {
 	PlanQuotas    map[string]int64
 }
 
-func (s Service) Provision(ctx context.Context, accountID, planCode string) (string, error) {
+func (s Service) Provision(ctx context.Context, accountID string) (string, error) {
 	now := s.now()
+	planCode, err := s.Repo.EntitledPlan(ctx, accountID, now)
+	if err != nil {
+		return "", err
+	}
 	quota := s.PlanQuotas[planCode]
 	if quota <= 0 {
 		return "", errors.New("unknown or unconfigured hosted plan")

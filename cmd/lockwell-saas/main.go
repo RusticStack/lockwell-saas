@@ -15,6 +15,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/config"
 	"github.com/RusticStack/lockwell-saas/internal/entitlements"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
+	"github.com/RusticStack/lockwell-saas/internal/provisioning"
 	"github.com/RusticStack/lockwell-saas/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -74,6 +75,17 @@ func main() {
 	mux.HandleFunc("POST /v1/accounts/login", accountHTTP.Login)
 	mux.HandleFunc("POST /v1/billing/checkout", billingHTTP.Checkout)
 	mux.HandleFunc("POST /v1/billing/portal", billingHTTP.Portal)
+	if cfg.ProvisioningEnabled {
+		provisionRepo := provisioning.Postgres{Pool: pool}
+		if err := provisionRepo.UpsertCell(ctx, provisioning.Reservation{CellID: cfg.CellID, Region: cfg.ScalewayRegion, PublicEndpoint: cfg.CellPublicEndpoint, AdminEndpoint: cfg.CellAdminEndpoint, AdminSecretRef: cfg.CellAdminSecretRef}, cfg.CellCapacity); err != nil {
+			logger.Error("configure hosted cell", "error", err)
+			os.Exit(1)
+		}
+		vault := provisioning.ScalewayVault{ProjectID: cfg.ScalewayProjectID, Region: cfg.ScalewayRegion, AuthToken: cfg.ScalewayAuthToken}
+		provisionHTTP := provisioning.HTTPHandler{Accounts: accountService, Service: provisioning.Service{Repo: provisionRepo, Cells: provisioning.LockwellCell{}, Vault: vault, PlanQuotas: map[string]int64{"starter": cfg.StarterQuotaBytes, "team": cfg.TeamQuotaBytes, "compliance": cfg.ComplianceQuotaBytes}}}
+		mux.HandleFunc("POST /v1/provisioning/credentials", provisionHTTP.RequestCredential)
+		mux.HandleFunc("POST /v1/provisioning/redeem", provisionHTTP.RedeemCredential)
+	}
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
