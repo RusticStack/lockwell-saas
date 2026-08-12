@@ -51,7 +51,11 @@ func (p Postgres) ApplyInvoice(ctx context.Context, outboxID string, invoice fin
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO hosted_invoices(stripe_invoice_id,account_id,stripe_customer_id,stripe_subscription_id,currency,status,subtotal,tax,total,amount_paid,amount_remaining,hosted_invoice_url,invoice_pdf,stripe_created_at,reconciled_at) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,NULLIF($12,''),NULLIF($13,''),$14,$15) ON CONFLICT(stripe_invoice_id) DO UPDATE SET account_id=EXCLUDED.account_id,stripe_customer_id=EXCLUDED.stripe_customer_id,stripe_subscription_id=EXCLUDED.stripe_subscription_id,currency=EXCLUDED.currency,status=EXCLUDED.status,subtotal=EXCLUDED.subtotal,tax=EXCLUDED.tax,total=EXCLUDED.total,amount_paid=EXCLUDED.amount_paid,amount_remaining=EXCLUDED.amount_remaining,hosted_invoice_url=EXCLUDED.hosted_invoice_url,invoice_pdf=EXCLUDED.invoice_pdf,stripe_created_at=EXCLUDED.stripe_created_at,reconciled_at=EXCLUDED.reconciled_at`, invoice.ID, accountID, invoice.CustomerID, invoice.SubscriptionID, invoice.Currency, invoice.Status, invoice.Subtotal, invoice.Tax, invoice.Total, invoice.AmountPaid, invoice.AmountRemaining, invoice.HostedURL, invoice.PDF, invoice.CreatedAt, now)
+	taxExempt := invoice.TaxEvidence.CustomerTaxExempt
+	if taxExempt == "" {
+		taxExempt = "none"
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO hosted_invoices(stripe_invoice_id,account_id,stripe_customer_id,stripe_subscription_id,currency,status,subtotal,tax,total,amount_paid,amount_remaining,hosted_invoice_url,invoice_pdf,stripe_created_at,reconciled_at,automatic_tax_enabled,automatic_tax_status,customer_tax_exempt,customer_country,customer_state,customer_postal_code) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,NULLIF($12,''),NULLIF($13,''),$14,$15,$16,NULLIF($17,''),$18,NULLIF($19,''),NULLIF($20,''),NULLIF($21,'')) ON CONFLICT(stripe_invoice_id) DO UPDATE SET account_id=EXCLUDED.account_id,stripe_customer_id=EXCLUDED.stripe_customer_id,stripe_subscription_id=EXCLUDED.stripe_subscription_id,currency=EXCLUDED.currency,status=EXCLUDED.status,subtotal=EXCLUDED.subtotal,tax=EXCLUDED.tax,total=EXCLUDED.total,amount_paid=EXCLUDED.amount_paid,amount_remaining=EXCLUDED.amount_remaining,hosted_invoice_url=EXCLUDED.hosted_invoice_url,invoice_pdf=EXCLUDED.invoice_pdf,stripe_created_at=EXCLUDED.stripe_created_at,reconciled_at=EXCLUDED.reconciled_at,automatic_tax_enabled=EXCLUDED.automatic_tax_enabled,automatic_tax_status=EXCLUDED.automatic_tax_status,customer_tax_exempt=EXCLUDED.customer_tax_exempt,customer_country=EXCLUDED.customer_country,customer_state=EXCLUDED.customer_state,customer_postal_code=EXCLUDED.customer_postal_code`, invoice.ID, accountID, invoice.CustomerID, invoice.SubscriptionID, invoice.Currency, invoice.Status, invoice.Subtotal, invoice.Tax, invoice.Total, invoice.AmountPaid, invoice.AmountRemaining, invoice.HostedURL, invoice.PDF, invoice.CreatedAt, now, invoice.TaxEvidence.AutomaticTaxEnabled, invoice.TaxEvidence.AutomaticTaxStatus, taxExempt, invoice.TaxEvidence.CustomerCountry, invoice.TaxEvidence.CustomerState, invoice.TaxEvidence.CustomerPostalCode)
 	if err != nil {
 		return err
 	}
@@ -67,6 +71,14 @@ func (p Postgres) ApplyInvoice(ctx context.Context, outboxID string, invoice fin
 			end = line.PeriodEnd
 		}
 		if _, err = tx.Exec(ctx, `INSERT INTO hosted_invoice_lines(stripe_line_id,stripe_invoice_id,stripe_price_id,description,currency,amount,quantity,period_start,period_end) VALUES($1,$2,NULLIF($3,''),$4,$5,$6,$7,$8,$9)`, line.ID, invoice.ID, line.PriceID, line.Description, line.Currency, line.Amount, line.Quantity, start, end); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(ctx, `DELETE FROM hosted_invoice_tax_amounts WHERE stripe_invoice_id=$1`, invoice.ID); err != nil {
+		return err
+	}
+	for ordinal, amount := range invoice.TaxEvidence.Amounts {
+		if _, err = tx.Exec(ctx, `INSERT INTO hosted_invoice_tax_amounts(stripe_invoice_id,ordinal,amount,taxable_amount,inclusive,stripe_tax_rate_id,taxability_reason) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''))`, invoice.ID, ordinal, amount.Amount, amount.TaxableAmount, amount.Inclusive, amount.TaxRateID, amount.TaxabilityReason); err != nil {
 			return err
 		}
 	}

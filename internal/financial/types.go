@@ -22,6 +22,23 @@ type Invoice struct {
 	Subtotal, Tax, Total, AmountPaid, AmountRemaining                           int64
 	CreatedAt                                                                   time.Time
 	Lines                                                                       []InvoiceLine
+	TaxEvidence                                                                 InvoiceTaxEvidence
+}
+
+type InvoiceTaxEvidence struct {
+	AutomaticTaxEnabled bool
+	AutomaticTaxStatus  string
+	CustomerTaxExempt   string
+	CustomerCountry     string
+	CustomerState       string
+	CustomerPostalCode  string
+	Amounts             []TaxAmount
+}
+
+type TaxAmount struct {
+	Amount, TaxableAmount       int64
+	Inclusive                   bool
+	TaxRateID, TaxabilityReason string
 }
 
 type InvoiceLine struct {

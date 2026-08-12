@@ -20,6 +20,9 @@ seller-of-record, VAT/OSS, invoicing, product-catalog, and operating-policy deci
   Invoice, all paginated line items, and Refund plus Charge before transactionally projecting financial state.
 - Financial projections validate Stripe customer/subscription binding, lease jobs, retry with a bounded policy, and
   dead-letter persistent failures. `invoice.paid` is complete only after entitlement and accounting both reconcile.
+- Checkout requires a billing address, updates the existing Stripe Customer address/name, enables automatic tax, and
+  collects tax IDs. Reconciliation preserves automatic-tax completion, customer tax treatment/location, and each
+  taxable/tax amount; inconsistent or incomplete automatic-tax evidence is retried rather than accepted as billable.
 - Secrets are environment references for development only; production deployment must inject them from a secret
   manager.
 
