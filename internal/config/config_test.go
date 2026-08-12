@@ -4,9 +4,17 @@ import "testing"
 
 func setRequiredBase(t *testing.T) {
 	t.Helper()
-	values := map[string]string{"LOCKWELL_SAAS_DATABASE_URL": "postgres://test", "LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET": "whsec_test", "LOCKWELL_SAAS_STRIPE_API_KEY": "sk_test", "LOCKWELL_SAAS_STRIPE_API_VERSION": "2026-06-30", "LOCKWELL_SAAS_STRIPE_STARTER_PRICE": "price_1", "LOCKWELL_SAAS_STRIPE_TEAM_PRICE": "price_2", "LOCKWELL_SAAS_STRIPE_COMPLIANCE_PRICE": "price_3", "LOCKWELL_SAAS_STRIPE_STORAGE_EVENT_NAME": "storage", "LOCKWELL_SAAS_STRIPE_OPERATIONS_EVENT_NAME": "operations", "LOCKWELL_SAAS_STRIPE_EGRESS_EVENT_NAME": "egress", "LOCKWELL_SAAS_CHECKOUT_SUCCESS_URL": "https://example.test/success", "LOCKWELL_SAAS_CHECKOUT_CANCEL_URL": "https://example.test/cancel", "LOCKWELL_SAAS_PORTAL_RETURN_URL": "https://example.test/portal", "LOCKWELL_SAAS_TERMS_VERSION": "v1"}
+	values := map[string]string{"LOCKWELL_SAAS_DATABASE_URL": "postgres://test", "LOCKWELL_SAAS_METRICS_TOKEN": "01234567890123456789012345678901", "LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET": "whsec_test", "LOCKWELL_SAAS_STRIPE_API_KEY": "sk_test", "LOCKWELL_SAAS_STRIPE_API_VERSION": "2026-06-30", "LOCKWELL_SAAS_STRIPE_STARTER_PRICE": "price_1", "LOCKWELL_SAAS_STRIPE_TEAM_PRICE": "price_2", "LOCKWELL_SAAS_STRIPE_COMPLIANCE_PRICE": "price_3", "LOCKWELL_SAAS_STRIPE_STORAGE_EVENT_NAME": "storage", "LOCKWELL_SAAS_STRIPE_OPERATIONS_EVENT_NAME": "operations", "LOCKWELL_SAAS_STRIPE_EGRESS_EVENT_NAME": "egress", "LOCKWELL_SAAS_CHECKOUT_SUCCESS_URL": "https://example.test/success", "LOCKWELL_SAAS_CHECKOUT_CANCEL_URL": "https://example.test/cancel", "LOCKWELL_SAAS_PORTAL_RETURN_URL": "https://example.test/portal", "LOCKWELL_SAAS_TERMS_VERSION": "v1"}
 	for key, value := range values {
 		t.Setenv(key, value)
+	}
+}
+
+func TestLoadRequiresStrongMetricsToken(t *testing.T) {
+	setRequiredBase(t)
+	t.Setenv("LOCKWELL_SAAS_METRICS_TOKEN", "short")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected weak metrics token denial")
 	}
 }
 func TestLoadRejectsPartiallyConfiguredProvisioning(t *testing.T) {

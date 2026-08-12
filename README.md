@@ -12,7 +12,9 @@ seller-of-record, VAT/OSS, invoicing, product-catalog, and operating-policy deci
 - PostgreSQL is the control-plane authority.
 - Stripe webhooks are verified from the exact raw body, deduplicated transactionally, and converted into an outbox job
   in the same database transaction.
-- `/healthz` is liveness only; `/readyz` proves database reachability.
+- `/healthz` is liveness only; `/readyz` proves database reachability. `/metrics` requires a strong bearer token and
+  exposes only bounded aggregate gauges for worker backlog, dead letters, entitlements, provisions, and reconciled
+  financial records; it never labels by account, tenant, bucket, or provider identity.
 - No Checkout redirect grants entitlement. Workers will reconcile authoritative Stripe objects before provisioning.
 - Invoice lifecycle and refund webhooks enqueue a separate bounded accounting job. It retrieves the authoritative
   Invoice, all paginated line items, and Refund plus Charge before transactionally projecting financial state.
@@ -34,6 +36,7 @@ Required environment:
 | Variable | Purpose |
 | --- | --- |
 | `LOCKWELL_SAAS_DATABASE_URL` | PostgreSQL connection string |
+| `LOCKWELL_SAAS_METRICS_TOKEN` | Required random bearer token of at least 32 characters for `/metrics` |
 | `LOCKWELL_SAAS_STRIPE_API_KEY` | Stripe restricted/test API key |
 | `LOCKWELL_SAAS_STRIPE_API_VERSION` | Account-pinned Stripe API version required on outbound calls and inbound events |
 | `LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET` | Stripe endpoint signing secret |
@@ -66,11 +69,11 @@ message through `/v1/accounts/verification/request`; the confirmation link submi
 `/v1/accounts/verification/confirm`. The token is placed in the link fragment, not its query, so the browser does not
 send the bearer value to the landing host or a request log; the verification page reads the fragment locally and POSTs
 it to the API. Browser access is disabled unless `LOCKWELL_SAAS_CUSTOMER_ORIGIN` is set to one exact origin. The CORS
-policy permits only `POST`/`OPTIONS` with `Authorization`, `Content-Type`, and `Idempotency-Key`, never enables credentialed cookies, and
+policy permits only `GET`/`POST`/`OPTIONS` with `Authorization`, `Content-Type`, and `Idempotency-Key`, never enables credentialed cookies, and
 does not expose Stripe webhooks or operational endpoints.
 
-Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
-fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real
+Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout, Portal,
+and credential provisioning fail closed until the single-use email-verification flow marks the address verified. Never put real
 credentials in source, `.env` examples, test fixtures, logs, or pull-request text.
 
 Usage metering accepts only trusted, immutable rollups from future cell collectors. Each rollup creates a deterministic
@@ -92,6 +95,14 @@ inside the adapter so a vault failure triggers compensating key revocation. The 
 the regional v1beta1 API, creates protected opaque secrets, writes version data, and reads only `latest_enabled`.
 PostgreSQL stores only cell metadata, access-key IDs, opaque secret references, and SHA-256 hashes of short-lived
 redemption tokens; it never stores admin tokens or access-key secrets. Redemption is account-bound, expiring,
-transactionally claimed, and exactly once. These adapters are not yet mounted as public routes: configured live cell
-inventory, production IAM credentials, entitlement-outbox enforcement, and provider readback must land first so the
-service cannot expose a nonfunctional provisioning UI.
+transactionally claimed, and exactly once. The provisioning and redemption routes are mounted only when provisioning
+is explicitly enabled with complete cell, quota, IAM, and secret-reference configuration. Live provider apply, IAM
+review, and cell readback are still required before enabling them for customers.
+
+## Operational scrape contract
+
+Scrape `GET /metrics` with `Authorization: Bearer <LOCKWELL_SAAS_METRICS_TOKEN>`. Alert at minimum when any dead-letter
+gauge is non-zero, when unprocessed Stripe events or pending jobs grow continuously, when provisions fail, or when
+grace/suspended entitlements change unexpectedly. The endpoint returns `503` if its aggregate database read fails and
+`401` for a missing or incorrect token. Keep it private at the reverse proxy even though application authentication is
+mandatory. Rotate the token through the deployment secret manager and never place it in URLs.

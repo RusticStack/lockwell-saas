@@ -18,6 +18,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/financial"
 	"github.com/RusticStack/lockwell-saas/internal/httpapi"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
+	"github.com/RusticStack/lockwell-saas/internal/operations"
 	"github.com/RusticStack/lockwell-saas/internal/provisioning"
 	"github.com/RusticStack/lockwell-saas/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -77,6 +78,7 @@ func main() {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.Handle("GET /metrics", operations.MetricsHandler{Repo: repo, Token: cfg.MetricsToken})
 	mux.Handle("POST /webhooks/stripe", billing.WebhookHandler{Secret: cfg.StripeWebhookSecret, ExpectedAPIVersion: cfg.StripeAPIVersion, Recorder: repo})
 	mux.HandleFunc("POST /v1/accounts/signup", accountHTTP.Signup)
 	mux.HandleFunc("POST /v1/accounts/login", accountHTTP.Login)
