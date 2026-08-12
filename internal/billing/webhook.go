@@ -26,10 +26,11 @@ type EventRecorder interface {
 }
 
 type WebhookHandler struct {
-	Secret    string
-	Tolerance time.Duration
-	Now       func() time.Time
-	Recorder  EventRecorder
+	Secret             string
+	ExpectedAPIVersion string
+	Tolerance          time.Duration
+	Now                func() time.Time
+	Recorder           EventRecorder
 }
 
 func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -59,12 +60,16 @@ func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid event", http.StatusBadRequest)
 		return
 	}
+	if h.ExpectedAPIVersion == "" || event.APIVersion != h.ExpectedAPIVersion {
+		http.Error(w, "unsupported Stripe API version", http.StatusBadRequest)
+		return
+	}
 	if h.Recorder == nil {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	digest := sha256.Sum256(body)
-	outboxID, err := randomID()
+	outboxID, err := RandomID()
 	if err != nil {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
@@ -81,7 +86,7 @@ func (h WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func randomID() (string, error) {
+func RandomID() (string, error) {
 	var value [16]byte
 	if _, err := rand.Read(value[:]); err != nil {
 		return "", err

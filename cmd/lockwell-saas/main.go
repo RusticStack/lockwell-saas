@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RusticStack/lockwell-saas/internal/accounts"
 	"github.com/RusticStack/lockwell-saas/internal/billing"
 	"github.com/RusticStack/lockwell-saas/internal/config"
 	"github.com/RusticStack/lockwell-saas/internal/store"
@@ -32,6 +33,21 @@ func main() {
 	}
 	defer pool.Close()
 	repo := store.Postgres{Pool: pool}
+	accountService := accounts.Service{Repo: repo, TermsVersion: cfg.TermsVersion}
+	accountHTTP := accounts.HTTPHandler{Service: accountService}
+	billingHTTP := billing.HTTPHandler{Service: billing.Service{
+		Accounts: accountService,
+		Repo:     repo,
+		Stripe:   billing.StripeClient{APIKey: cfg.StripeAPIKey, APIVersion: cfg.StripeAPIVersion},
+		PriceIDs: map[string]string{
+			"starter":    cfg.StripeStarterPrice,
+			"team":       cfg.StripeTeamPrice,
+			"compliance": cfg.StripeCompliancePrice,
+		},
+		SuccessURL: cfg.CheckoutSuccessURL,
+		CancelURL:  cfg.CheckoutCancelURL,
+		PortalURL:  cfg.PortalReturnURL,
+	}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -44,7 +60,11 @@ func main() {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.Handle("POST /webhooks/stripe", billing.WebhookHandler{Secret: cfg.StripeWebhookSecret, Recorder: repo})
+	mux.Handle("POST /webhooks/stripe", billing.WebhookHandler{Secret: cfg.StripeWebhookSecret, ExpectedAPIVersion: cfg.StripeAPIVersion, Recorder: repo})
+	mux.HandleFunc("POST /v1/accounts/signup", accountHTTP.Signup)
+	mux.HandleFunc("POST /v1/accounts/login", accountHTTP.Login)
+	mux.HandleFunc("POST /v1/billing/checkout", billingHTTP.Checkout)
+	mux.HandleFunc("POST /v1/billing/portal", billingHTTP.Portal)
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,

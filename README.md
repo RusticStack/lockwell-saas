@@ -30,8 +30,18 @@ Required environment:
 | Variable | Purpose |
 | --- | --- |
 | `LOCKWELL_SAAS_DATABASE_URL` | PostgreSQL connection string |
+| `LOCKWELL_SAAS_STRIPE_API_KEY` | Stripe restricted/test API key |
+| `LOCKWELL_SAAS_STRIPE_API_VERSION` | Account-pinned Stripe API version required on outbound calls and inbound events |
 | `LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET` | Stripe endpoint signing secret |
+| `LOCKWELL_SAAS_STRIPE_STARTER_PRICE` | Server-side allowlisted recurring Starter Price ID |
+| `LOCKWELL_SAAS_STRIPE_TEAM_PRICE` | Server-side allowlisted recurring Team Price ID |
+| `LOCKWELL_SAAS_STRIPE_COMPLIANCE_PRICE` | Server-side allowlisted recurring Compliance Price ID |
+| `LOCKWELL_SAAS_CHECKOUT_SUCCESS_URL` | Post-Checkout UI URL; never treated as entitlement proof |
+| `LOCKWELL_SAAS_CHECKOUT_CANCEL_URL` | Checkout cancellation UI URL |
+| `LOCKWELL_SAAS_PORTAL_RETURN_URL` | Customer Portal return URL |
+| `LOCKWELL_SAAS_TERMS_VERSION` | Exact terms version new accounts must accept |
 | `LOCKWELL_SAAS_LISTEN_ADDR` | Optional listener; defaults to `127.0.0.1:8080` |
 
-Apply [`migrations/0001_control_plane.sql`](migrations/0001_control_plane.sql) before starting the service. Never put
-real credentials in source, `.env` examples, test fixtures, logs, or pull-request text.
+Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
+fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real
+credentials in source, `.env` examples, test fixtures, logs, or pull-request text.

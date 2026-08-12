@@ -32,7 +32,7 @@ func TestWebhookHandlerVerifiesBeforeRecordingRawPayload(t *testing.T) {
 	secret := "whsec_test_only"
 	payload := []byte(`{"id":"evt_1","type":"invoice.paid","api_version":"2026-06-30","created":1700000000}`)
 	recorder := &recordingStore{}
-	handler := WebhookHandler{Secret: secret, Now: func() time.Time { return now }, Recorder: recorder}
+	handler := WebhookHandler{Secret: secret, ExpectedAPIVersion: "2026-06-30", Now: func() time.Time { return now }, Recorder: recorder}
 
 	request := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(string(payload)))
 	request.Header.Set("Stripe-Signature", stripeTestSignature(secret, payload, now))
@@ -50,11 +50,11 @@ func TestWebhookHandlerVerifiesBeforeRecordingRawPayload(t *testing.T) {
 func TestWebhookHandlerRejectsTamperingBeforeRecording(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	secret := "whsec_test_only"
-	signed := []byte(`{"id":"evt_1","type":"invoice.paid","created":1700000000}`)
+	signed := []byte(`{"id":"evt_1","type":"invoice.paid","api_version":"2026-06-30","created":1700000000}`)
 	recorder := &recordingStore{}
-	handler := WebhookHandler{Secret: secret, Now: func() time.Time { return now }, Recorder: recorder}
+	handler := WebhookHandler{Secret: secret, ExpectedAPIVersion: "2026-06-30", Now: func() time.Time { return now }, Recorder: recorder}
 
-	request := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(`{"id":"evt_2","type":"invoice.paid","created":1700000000}`))
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(`{"id":"evt_2","type":"invoice.paid","api_version":"2026-06-30","created":1700000000}`))
 	request.Header.Set("Stripe-Signature", stripeTestSignature(secret, signed, now))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
@@ -67,9 +67,9 @@ func TestWebhookHandlerRejectsTamperingBeforeRecording(t *testing.T) {
 func TestWebhookHandlerMapsConflictingReplayToConflict(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	secret := "whsec_test_only"
-	payload := []byte(`{"id":"evt_1","type":"invoice.paid","created":1700000000}`)
+	payload := []byte(`{"id":"evt_1","type":"invoice.paid","api_version":"2026-06-30","created":1700000000}`)
 	recorder := &recordingStore{err: ErrConflictingReplay}
-	handler := WebhookHandler{Secret: secret, Now: func() time.Time { return now }, Recorder: recorder}
+	handler := WebhookHandler{Secret: secret, ExpectedAPIVersion: "2026-06-30", Now: func() time.Time { return now }, Recorder: recorder}
 
 	request := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(string(payload)))
 	request.Header.Set("Stripe-Signature", stripeTestSignature(secret, payload, now))
@@ -77,6 +77,21 @@ func TestWebhookHandlerMapsConflictingReplayToConflict(t *testing.T) {
 	handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusConflict || recorder.calls != 1 {
+		t.Fatalf("status = %d, recorder calls = %d", response.Code, recorder.calls)
+	}
+}
+
+func TestWebhookHandlerRejectsUnexpectedAPIVersion(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	secret := "whsec_test_only"
+	payload := []byte(`{"id":"evt_1","type":"invoice.paid","api_version":"old-version","created":1700000000}`)
+	recorder := &recordingStore{}
+	handler := WebhookHandler{Secret: secret, ExpectedAPIVersion: "2026-06-30", Now: func() time.Time { return now }, Recorder: recorder}
+	request := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(string(payload)))
+	request.Header.Set("Stripe-Signature", stripeTestSignature(secret, payload, now))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || recorder.calls != 0 {
 		t.Fatalf("status = %d, recorder calls = %d", response.Code, recorder.calls)
 	}
 }
