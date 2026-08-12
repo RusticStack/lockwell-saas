@@ -91,7 +91,7 @@ func TestPostgresProvisionAndExactlyOnceRedemption(t *testing.T) {
 		t.Fatal(err)
 	}
 	suspender := &suspenderStub{}
-	processed, err := (EnforcementWorker{Repo: repo, Vault: vault, Cells: suspender, Now: func() time.Time { return now }}).RunOnce(ctx)
+	processed, err := (EnforcementWorker{Repo: repo, Vault: vault, Cells: suspender, Now: func() time.Time { return time.Now().UTC().Add(time.Second) }}).RunOnce(ctx)
 	if err != nil || !processed || suspender.calls != 1 {
 		t.Fatalf("processed=%v calls=%d err=%v", processed, suspender.calls, err)
 	}
