@@ -45,6 +45,14 @@ Required environment:
 | `LOCKWELL_SAAS_TERMS_VERSION` | Exact terms version new accounts must accept |
 | `LOCKWELL_SAAS_LISTEN_ADDR` | Optional listener; defaults to `127.0.0.1:8080` |
 
+Provisioning is disabled unless `LOCKWELL_SAAS_PROVISIONING_ENABLED=true`. When enabled, startup fails closed unless
+all of the following are present: `LOCKWELL_SAAS_SCALEWAY_PROJECT_ID`, `LOCKWELL_SAAS_SCALEWAY_REGION`,
+`LOCKWELL_SAAS_SCALEWAY_AUTH_TOKEN`, `LOCKWELL_SAAS_CELL_ID`, `LOCKWELL_SAAS_CELL_PUBLIC_ENDPOINT`,
+`LOCKWELL_SAAS_CELL_ADMIN_ENDPOINT`, `LOCKWELL_SAAS_CELL_ADMIN_SECRET_REF`, `LOCKWELL_SAAS_CELL_CAPACITY`, and positive
+`LOCKWELL_SAAS_STARTER_QUOTA_BYTES`, `LOCKWELL_SAAS_TEAM_QUOTA_BYTES`, and
+`LOCKWELL_SAAS_COMPLIANCE_QUOTA_BYTES`. The admin secret reference must identify an existing secret in the configured
+Scaleway region; the token needs least-privilege access to that secret and the hosted credential path.
+
 Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
 fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real
 credentials in source, `.env` examples, test fixtures, logs, or pull-request text.

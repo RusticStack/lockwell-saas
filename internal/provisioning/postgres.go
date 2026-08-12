@@ -13,6 +13,23 @@ import (
 
 type Postgres struct{ Pool *pgxpool.Pool }
 
+func (p Postgres) EntitledPlan(ctx context.Context, accountID string, now time.Time) (string, error) {
+	var plan string
+	err := p.Pool.QueryRow(ctx, `SELECT plan_code FROM hosted_subscriptions WHERE account_id=$1 AND entitlement_status IN ('active','grace') AND (entitlement_until IS NULL OR entitlement_until>$2) ORDER BY updated_at DESC LIMIT 1`, accountID, now).Scan(&plan)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errors.New("account has no current hosted entitlement")
+	}
+	return plan, err
+}
+
+func (p Postgres) UpsertCell(ctx context.Context, r Reservation, capacity int) error {
+	if r.CellID == "" || r.Region == "" || r.PublicEndpoint == "" || r.AdminEndpoint == "" || r.AdminSecretRef == "" || capacity <= 0 {
+		return errors.New("complete cell configuration and positive capacity are required")
+	}
+	_, err := p.Pool.Exec(ctx, `INSERT INTO hosting_cells(id,region,public_endpoint,admin_endpoint,admin_secret_ref,status,tenant_capacity) VALUES($1,$2,$3,$4,$5,'ready',$6) ON CONFLICT(id) DO UPDATE SET region=EXCLUDED.region,public_endpoint=EXCLUDED.public_endpoint,admin_endpoint=EXCLUDED.admin_endpoint,admin_secret_ref=EXCLUDED.admin_secret_ref,tenant_capacity=EXCLUDED.tenant_capacity,updated_at=now()`, r.CellID, r.Region, r.PublicEndpoint, r.AdminEndpoint, r.AdminSecretRef, capacity)
+	return err
+}
+
 func (p Postgres) Reserve(ctx context.Context, accountID, planCode string, quotaBytes int64, now time.Time) (Reservation, bool, error) {
 	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {

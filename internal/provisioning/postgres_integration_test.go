@@ -35,9 +35,14 @@ func TestPostgresProvisionAndExactlyOnceRedemption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	_, err = pool.Exec(ctx, `INSERT INTO hosted_subscriptions(stripe_subscription_id,account_id,stripe_customer_id,plan_code,stripe_price_id,stripe_status,entitlement_status,entitlement_until,last_stripe_event_created,last_stripe_event_priority,last_stripe_event_id) VALUES($1,$2,'cus_test','starter','price_test','active','active',$3,now(),1,'evt_test')`, "sub_"+accountID, accountID, time.Now().UTC().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM credential_redemptions WHERE provision_id IN (SELECT id FROM tenant_provisions WHERE account_id=$1)`, accountID)
 		_, _ = pool.Exec(ctx, `DELETE FROM tenant_provisions WHERE account_id=$1`, accountID)
+		_, _ = pool.Exec(ctx, `DELETE FROM hosted_subscriptions WHERE account_id=$1`, accountID)
 		_, _ = pool.Exec(ctx, `DELETE FROM hosting_cells WHERE id=$1`, cellID)
 		_, _ = pool.Exec(ctx, `DELETE FROM customer_accounts WHERE id=$1`, accountID)
 	})
@@ -46,7 +51,7 @@ func TestPostgresProvisionAndExactlyOnceRedemption(t *testing.T) {
 	cells := &fakeCells{}
 	now := time.Now().UTC().Truncate(time.Second)
 	service := Service{Repo: repo, Cells: cells, Vault: vault, Now: func() time.Time { return now }, PlanQuotas: map[string]int64{"starter": 1 << 30}}
-	token, err := service.Provision(ctx, accountID, "starter")
+	token, err := service.Provision(ctx, accountID)
 	if err != nil {
 		t.Fatal(err)
 	}

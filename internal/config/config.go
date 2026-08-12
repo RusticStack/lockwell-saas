@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,18 @@ type Config struct {
 	CheckoutCancelURL         string
 	PortalReturnURL           string
 	TermsVersion              string
+	ProvisioningEnabled       bool
+	ScalewayProjectID         string
+	ScalewayRegion            string
+	ScalewayAuthToken         string
+	CellID                    string
+	CellPublicEndpoint        string
+	CellAdminEndpoint         string
+	CellAdminSecretRef        string
+	CellCapacity              int
+	StarterQuotaBytes         int64
+	TeamQuotaBytes            int64
+	ComplianceQuotaBytes      int64
 }
 
 func Load() (Config, error) {
@@ -41,7 +54,19 @@ func Load() (Config, error) {
 		CheckoutCancelURL:         strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CHECKOUT_CANCEL_URL")),
 		PortalReturnURL:           strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PORTAL_RETURN_URL")),
 		TermsVersion:              strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_TERMS_VERSION")),
+		ScalewayProjectID:         strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_SCALEWAY_PROJECT_ID")),
+		ScalewayRegion:            strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_SCALEWAY_REGION")),
+		ScalewayAuthToken:         strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_SCALEWAY_AUTH_TOKEN")),
+		CellID:                    strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_ID")),
+		CellPublicEndpoint:        strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_PUBLIC_ENDPOINT")),
+		CellAdminEndpoint:         strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_ADMIN_ENDPOINT")),
+		CellAdminSecretRef:        strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_ADMIN_SECRET_REF")),
 	}
+	cfg.ProvisioningEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PROVISIONING_ENABLED")))
+	cfg.CellCapacity, _ = strconv.Atoi(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CELL_CAPACITY")))
+	cfg.StarterQuotaBytes, _ = strconv.ParseInt(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STARTER_QUOTA_BYTES")), 10, 64)
+	cfg.TeamQuotaBytes, _ = strconv.ParseInt(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_TEAM_QUOTA_BYTES")), 10, 64)
+	cfg.ComplianceQuotaBytes, _ = strconv.ParseInt(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_COMPLIANCE_QUOTA_BYTES")), 10, 64)
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1:8080"
 	}
@@ -59,6 +84,9 @@ func Load() (Config, error) {
 	}
 	if cfg.CheckoutSuccessURL == "" || cfg.CheckoutCancelURL == "" || cfg.PortalReturnURL == "" || cfg.TermsVersion == "" {
 		return Config{}, errors.New("Checkout/Portal URLs and terms version are required")
+	}
+	if cfg.ProvisioningEnabled && (cfg.ScalewayProjectID == "" || cfg.ScalewayRegion == "" || cfg.ScalewayAuthToken == "" || cfg.CellID == "" || cfg.CellPublicEndpoint == "" || cfg.CellAdminEndpoint == "" || cfg.CellAdminSecretRef == "" || cfg.CellCapacity <= 0 || cfg.StarterQuotaBytes <= 0 || cfg.TeamQuotaBytes <= 0 || cfg.ComplianceQuotaBytes <= 0) {
+		return Config{}, errors.New("enabled provisioning requires complete Scaleway, cell, capacity, and positive plan-quota configuration")
 	}
 	return cfg, nil
 }
