@@ -20,6 +20,9 @@ type Config struct {
 	StripeStorageEventName    string
 	StripeOperationsEventName string
 	StripeEgressEventName     string
+	StripeStorageMeterID      string
+	StripeOperationsMeterID   string
+	StripeEgressMeterID       string
 	CheckoutSuccessURL        string
 	CheckoutCancelURL         string
 	PortalReturnURL           string
@@ -42,6 +45,7 @@ type Config struct {
 	EmailVerificationURL      string
 	CustomerOrigin            string
 	MetricsToken              string
+	UsageIngestToken          string
 }
 
 func Load() (Config, error) {
@@ -57,6 +61,9 @@ func Load() (Config, error) {
 		StripeStorageEventName:    strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STRIPE_STORAGE_EVENT_NAME")),
 		StripeOperationsEventName: strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STRIPE_OPERATIONS_EVENT_NAME")),
 		StripeEgressEventName:     strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STRIPE_EGRESS_EVENT_NAME")),
+		StripeStorageMeterID:      strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STRIPE_STORAGE_METER_ID")),
+		StripeOperationsMeterID:   strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STRIPE_OPERATIONS_METER_ID")),
+		StripeEgressMeterID:       strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_STRIPE_EGRESS_METER_ID")),
 		CheckoutSuccessURL:        strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CHECKOUT_SUCCESS_URL")),
 		CheckoutCancelURL:         strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CHECKOUT_CANCEL_URL")),
 		PortalReturnURL:           strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PORTAL_RETURN_URL")),
@@ -73,6 +80,7 @@ func Load() (Config, error) {
 		EmailVerificationURL:      strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_VERIFICATION_URL")),
 		CustomerOrigin:            strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_CUSTOMER_ORIGIN")),
 		MetricsToken:              strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_METRICS_TOKEN")),
+		UsageIngestToken:          strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_USAGE_INGEST_TOKEN")),
 	}
 	cfg.ProvisioningEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_PROVISIONING_ENABLED")))
 	cfg.EmailEnabled, _ = strconv.ParseBool(strings.TrimSpace(os.Getenv("LOCKWELL_SAAS_EMAIL_ENABLED")))
@@ -89,6 +97,9 @@ func Load() (Config, error) {
 	if len(cfg.MetricsToken) < 32 {
 		return Config{}, errors.New("LOCKWELL_SAAS_METRICS_TOKEN must contain at least 32 characters")
 	}
+	if len(cfg.UsageIngestToken) < 32 {
+		return Config{}, errors.New("LOCKWELL_SAAS_USAGE_INGEST_TOKEN must contain at least 32 characters")
+	}
 	if cfg.StripeWebhookSecret == "" {
 		return Config{}, errors.New("LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET is required")
 	}
@@ -97,6 +108,9 @@ func Load() (Config, error) {
 	}
 	if cfg.StripeStorageEventName == "" || cfg.StripeOperationsEventName == "" || cfg.StripeEgressEventName == "" {
 		return Config{}, errors.New("all Stripe meter event names are required")
+	}
+	if cfg.StripeStorageMeterID == "" || cfg.StripeOperationsMeterID == "" || cfg.StripeEgressMeterID == "" {
+		return Config{}, errors.New("all Stripe meter IDs are required")
 	}
 	if cfg.CheckoutSuccessURL == "" || cfg.CheckoutCancelURL == "" || cfg.PortalReturnURL == "" || cfg.TermsVersion == "" {
 		return Config{}, errors.New("Checkout/Portal URLs and terms version are required")

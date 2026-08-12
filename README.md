@@ -40,6 +40,7 @@ Required environment:
 | --- | --- |
 | `LOCKWELL_SAAS_DATABASE_URL` | PostgreSQL connection string |
 | `LOCKWELL_SAAS_METRICS_TOKEN` | Required random bearer token of at least 32 characters for `/metrics` |
+| `LOCKWELL_SAAS_USAGE_INGEST_TOKEN` | Required random bearer token of at least 32 characters for the private cell usage-ingest route |
 | `LOCKWELL_SAAS_STRIPE_API_KEY` | Stripe restricted/test API key |
 | `LOCKWELL_SAAS_STRIPE_API_VERSION` | Account-pinned Stripe API version required on outbound calls and inbound events |
 | `LOCKWELL_SAAS_STRIPE_WEBHOOK_SECRET` | Stripe endpoint signing secret |
@@ -49,6 +50,9 @@ Required environment:
 | `LOCKWELL_SAAS_STRIPE_STORAGE_EVENT_NAME` | Approved storage MiB-hour meter event name |
 | `LOCKWELL_SAAS_STRIPE_OPERATIONS_EVENT_NAME` | Approved successful-operation meter event name |
 | `LOCKWELL_SAAS_STRIPE_EGRESS_EVENT_NAME` | Approved delivered-egress MiB meter event name |
+| `LOCKWELL_SAAS_STRIPE_STORAGE_METER_ID` | Stripe Meter ID paired with the storage event name |
+| `LOCKWELL_SAAS_STRIPE_OPERATIONS_METER_ID` | Stripe Meter ID paired with the operations event name |
+| `LOCKWELL_SAAS_STRIPE_EGRESS_METER_ID` | Stripe Meter ID paired with the egress event name |
 | `LOCKWELL_SAAS_CHECKOUT_SUCCESS_URL` | Post-Checkout UI URL; never treated as entitlement proof |
 | `LOCKWELL_SAAS_CHECKOUT_CANCEL_URL` | Checkout cancellation UI URL |
 | `LOCKWELL_SAAS_PORTAL_RETURN_URL` | Customer Portal return URL |
@@ -79,8 +83,14 @@ Apply migrations in numeric order before starting the service. Accounts are crea
 and credential provisioning fail closed until the single-use email-verification flow marks the address verified. Never put real
 credentials in source, `.env` examples, test fixtures, logs, or pull-request text.
 
-Usage metering accepts only trusted, immutable rollups from future cell collectors. Each rollup creates a deterministic
-Stripe Meter Event identifier and a transactional export row. Workers use bounded retries, reclaim abandoned claims,
+Usage metering accepts only trusted, immutable windows at private `POST /internal/v1/usage-windows`. The route requires
+its own strong bearer token, accepts no account or Stripe customer identity, and resolves the `(cell_id, tenant_id)`
+pair against the serving tenant provision. The caller supplies minute-aligned storage MiB-hours, successful operations,
+and delivered egress MiB under one source revision plus the SHA-256 digest of the canonical JSON evidence. The service
+recomputes that digest and transactionally creates one immutable window, all three rollups, and all three Stripe export
+rows. Exact replay is a no-op; the same revision with different evidence and an unbound tenant both fail closed. A real
+cell/edge collector that produces these reconciled windows and live evidence remains required before paid launch.
+Each rollup creates a deterministic Stripe Meter Event identifier. Workers use bounded retries, reclaim abandoned claims,
 dead-letter repeated delivery failures, and compare Stripe's asynchronous meter summary with the internal aggregate
 before marking a window reconciled. Customer-facing requests cannot submit or alter billable usage.
 
