@@ -27,12 +27,19 @@ func TestPostgresProvisionAndExactlyOnceRedemption(t *testing.T) {
 		t.Fatal(err)
 	}
 	cellID := "cell-" + accountID
-	_, err = pool.Exec(ctx, `INSERT INTO customer_accounts(id,email,password_hash,terms_version,terms_accepted_at) VALUES($1,$2,'test','test',now()); INSERT INTO hosting_cells(id,region,public_endpoint,admin_endpoint,admin_secret_ref,status,tenant_capacity) VALUES($3,'fr-par','https://s3.example.test','https://admin.example.test','vault://cell','ready',1)`, accountID, accountID+"@example.test", cellID)
+	_, err = pool.Exec(ctx, `INSERT INTO customer_accounts(id,email,password_hash,terms_version,terms_accepted_at) VALUES($1,$2,'test','test',now())`, accountID, accountID+"@example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(ctx, `INSERT INTO hosting_cells(id,region,public_endpoint,admin_endpoint,admin_secret_ref,status,tenant_capacity) VALUES($1,'fr-par','https://s3.example.test','https://admin.example.test','vault://cell','ready',1)`, cellID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `DELETE FROM credential_redemptions WHERE provision_id IN (SELECT id FROM tenant_provisions WHERE account_id=$1); DELETE FROM tenant_provisions WHERE account_id=$1; DELETE FROM hosting_cells WHERE id=$2; DELETE FROM customer_accounts WHERE id=$1`, accountID, cellID)
+		_, _ = pool.Exec(ctx, `DELETE FROM credential_redemptions WHERE provision_id IN (SELECT id FROM tenant_provisions WHERE account_id=$1)`, accountID)
+		_, _ = pool.Exec(ctx, `DELETE FROM tenant_provisions WHERE account_id=$1`, accountID)
+		_, _ = pool.Exec(ctx, `DELETE FROM hosting_cells WHERE id=$1`, cellID)
+		_, _ = pool.Exec(ctx, `DELETE FROM customer_accounts WHERE id=$1`, accountID)
 	})
 	repo := Postgres{Pool: pool}
 	vault := &memoryVault{values: map[string][]byte{"vault://cell": []byte("admin")}}
