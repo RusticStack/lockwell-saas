@@ -78,6 +78,25 @@ func validateInvoice(v Invoice) error {
 	if v.ID == "" || v.CustomerID == "" || len(v.Currency) != 3 || v.Status == "" || v.CreatedAt.IsZero() || v.Subtotal < 0 || v.Tax < 0 || v.Total < 0 || v.AmountPaid < 0 || v.AmountRemaining < 0 || v.Tax > v.Total {
 		return ErrInvalidFinancialRecord
 	}
+	if v.TaxEvidence.AutomaticTaxEnabled && v.TaxEvidence.AutomaticTaxStatus != "complete" {
+		return ErrInvalidFinancialRecord
+	}
+	if v.TaxEvidence.CustomerTaxExempt != "" && v.TaxEvidence.CustomerTaxExempt != "none" && v.TaxEvidence.CustomerTaxExempt != "exempt" && v.TaxEvidence.CustomerTaxExempt != "reverse" {
+		return ErrInvalidFinancialRecord
+	}
+	if v.TaxEvidence.CustomerCountry != "" && len(v.TaxEvidence.CustomerCountry) != 2 {
+		return ErrInvalidFinancialRecord
+	}
+	taxTotal := int64(0)
+	for _, amount := range v.TaxEvidence.Amounts {
+		if amount.Amount < 0 || amount.TaxableAmount < 0 {
+			return ErrInvalidFinancialRecord
+		}
+		taxTotal += amount.Amount
+	}
+	if taxTotal != v.Tax {
+		return ErrInvalidFinancialRecord
+	}
 	seen := map[string]bool{}
 	for _, line := range v.Lines {
 		if line.ID == "" || seen[line.ID] || len(line.Currency) != 3 || line.Quantity < 0 {

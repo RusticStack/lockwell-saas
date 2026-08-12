@@ -29,10 +29,13 @@ func (p FinancialProvider) RetrieveInvoice(ctx context.Context, id string) (fina
 		return financial.Invoice{}, err
 	}
 	tax := int64(0)
+	taxAmounts := make([]financial.TaxAmount, 0, len(value.TotalTaxes))
 	for _, item := range value.TotalTaxes {
 		tax += item.Amount
+		taxAmounts = append(taxAmounts, financial.TaxAmount{Amount: item.Amount, TaxableAmount: item.TaxableAmount, Inclusive: item.Inclusive, TaxRateID: item.TaxRate, TaxabilityReason: item.TaxabilityReason})
 	}
-	return financial.Invoice{ID: value.ID, AccountID: value.Metadata["account_id"], CustomerID: value.Customer, SubscriptionID: value.subscriptionID(), Currency: strings.ToLower(value.Currency), Status: value.Status, HostedURL: value.HostedInvoiceURL, PDF: value.InvoicePDF, Subtotal: value.Subtotal, Tax: tax, Total: value.Total, AmountPaid: value.AmountPaid, AmountRemaining: value.AmountRemaining, CreatedAt: time.Unix(value.Created, 0).UTC(), Lines: lines}, nil
+	evidence := financial.InvoiceTaxEvidence{AutomaticTaxEnabled: value.AutomaticTax.Enabled, AutomaticTaxStatus: value.AutomaticTax.Status, CustomerTaxExempt: value.CustomerTaxExempt, CustomerCountry: strings.ToUpper(value.CustomerAddress.Country), CustomerState: value.CustomerAddress.State, CustomerPostalCode: value.CustomerAddress.PostalCode, Amounts: taxAmounts}
+	return financial.Invoice{ID: value.ID, AccountID: value.Metadata["account_id"], CustomerID: value.Customer, SubscriptionID: value.subscriptionID(), Currency: strings.ToLower(value.Currency), Status: value.Status, HostedURL: value.HostedInvoiceURL, PDF: value.InvoicePDF, Subtotal: value.Subtotal, Tax: tax, Total: value.Total, AmountPaid: value.AmountPaid, AmountRemaining: value.AmountRemaining, CreatedAt: time.Unix(value.Created, 0).UTC(), Lines: lines, TaxEvidence: evidence}, nil
 }
 
 func (p FinancialProvider) RetrieveRefund(ctx context.Context, id string) (financial.Refund, error) {
@@ -87,8 +90,22 @@ type stripeInvoice struct {
 		} `json:"subscription_details"`
 	} `json:"parent"`
 	TotalTaxes []struct {
-		Amount int64 `json:"amount"`
+		Amount           int64  `json:"amount"`
+		TaxableAmount    int64  `json:"taxable_amount"`
+		Inclusive        bool   `json:"inclusive"`
+		TaxRate          string `json:"tax_rate"`
+		TaxabilityReason string `json:"taxability_reason"`
 	} `json:"total_taxes"`
+	AutomaticTax struct {
+		Enabled bool   `json:"enabled"`
+		Status  string `json:"status"`
+	} `json:"automatic_tax"`
+	CustomerTaxExempt string `json:"customer_tax_exempt"`
+	CustomerAddress   struct {
+		Country    string `json:"country"`
+		State      string `json:"state"`
+		PostalCode string `json:"postal_code"`
+	} `json:"customer_address"`
 }
 
 func (v stripeInvoice) subscriptionID() string {

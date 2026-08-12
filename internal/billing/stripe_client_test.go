@@ -25,6 +25,9 @@ func TestCreateCheckoutSessionBindsTaxCustomerPlanAndIdempotency(t *testing.T) {
 			"line_items[0][price]":         "price_starter",
 			"automatic_tax[enabled]":       "true",
 			"tax_id_collection[enabled]":   "true",
+			"billing_address_collection":   "required",
+			"customer_update[address]":     "auto",
+			"customer_update[name]":        "auto",
 			"client_reference_id":          "acct",
 			"metadata[lockwell_plan_code]": "starter",
 		}

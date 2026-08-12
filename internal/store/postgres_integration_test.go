@@ -113,14 +113,15 @@ func TestPostgresFinancialReconciliationBindsCustomerAndPersistsLines(t *testing
 		t.Fatalf("claim=%#v ok=%v err=%v", claimed, ok, err)
 	}
 	now := time.Now().UTC()
-	invoice := financial.Invoice{ID: invoiceID, AccountID: accountID, CustomerID: customerID, SubscriptionID: subscriptionID, Currency: "eur", Status: "paid", Subtotal: 1000, Tax: 230, Total: 1230, AmountPaid: 1230, CreatedAt: now, Lines: []financial.InvoiceLine{{ID: "il_" + accountID, PriceID: "price_starter", Description: "Starter", Currency: "eur", Amount: 1000, Quantity: 1}}}
+	invoice := financial.Invoice{ID: invoiceID, AccountID: accountID, CustomerID: customerID, SubscriptionID: subscriptionID, Currency: "eur", Status: "paid", Subtotal: 1000, Tax: 230, Total: 1230, AmountPaid: 1230, CreatedAt: now, Lines: []financial.InvoiceLine{{ID: "il_" + accountID, PriceID: "price_starter", Description: "Starter", Currency: "eur", Amount: 1000, Quantity: 1}}, TaxEvidence: financial.InvoiceTaxEvidence{AutomaticTaxEnabled: true, AutomaticTaxStatus: "complete", CustomerTaxExempt: "none", CustomerCountry: "PT", Amounts: []financial.TaxAmount{{Amount: 230, TaxableAmount: 1000, TaxRateID: "txr_test", TaxabilityReason: "standard_rated"}}}}
 	if err = repo.ApplyInvoice(ctx, claimed.OutboxID, invoice, now); err != nil {
 		t.Fatal(err)
 	}
 	var total, tax int64
-	var lineCount int
-	if err = pool.QueryRow(ctx, `SELECT total,tax,(SELECT count(*) FROM hosted_invoice_lines WHERE stripe_invoice_id=$1) FROM hosted_invoices WHERE stripe_invoice_id=$1`, invoiceID).Scan(&total, &tax, &lineCount); err != nil || total != 1230 || tax != 230 || lineCount != 1 {
-		t.Fatalf("total=%d tax=%d lines=%d err=%v", total, tax, lineCount, err)
+	var lineCount, taxCount int
+	var automaticTaxStatus, country string
+	if err = pool.QueryRow(ctx, `SELECT total,tax,automatic_tax_status,customer_country,(SELECT count(*) FROM hosted_invoice_lines WHERE stripe_invoice_id=$1),(SELECT count(*) FROM hosted_invoice_tax_amounts WHERE stripe_invoice_id=$1) FROM hosted_invoices WHERE stripe_invoice_id=$1`, invoiceID).Scan(&total, &tax, &automaticTaxStatus, &country, &lineCount, &taxCount); err != nil || total != 1230 || tax != 230 || automaticTaxStatus != "complete" || country != "PT" || lineCount != 1 || taxCount != 1 {
+		t.Fatalf("total=%d tax=%d automatic=%q country=%q lines=%d taxes=%d err=%v", total, tax, automaticTaxStatus, country, lineCount, taxCount, err)
 	}
 }
 

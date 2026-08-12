@@ -59,3 +59,22 @@ func TestWorkerRetriesAndDeadLettersInvalidRefund(t *testing.T) {
 		t.Fatalf("err=%v retried=%v dead=%v", err, repo.retried, repo.dead)
 	}
 }
+
+func TestWorkerRejectsIncompleteOrInconsistentAutomaticTaxEvidence(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	base := Invoice{ID: "in_1", CustomerID: "cus", Currency: "eur", Status: "paid", CreatedAt: now, Subtotal: 1000, Tax: 230, Total: 1230, Lines: []InvoiceLine{{ID: "il_1", Currency: "eur", Quantity: 1}}}
+	for name, evidence := range map[string]InvoiceTaxEvidence{
+		"incomplete": {AutomaticTaxEnabled: true, AutomaticTaxStatus: "requires_location_inputs", CustomerTaxExempt: "none", Amounts: []TaxAmount{{Amount: 230, TaxableAmount: 1000}}},
+		"mismatch":   {AutomaticTaxEnabled: true, AutomaticTaxStatus: "complete", CustomerTaxExempt: "none", Amounts: []TaxAmount{{Amount: 100, TaxableAmount: 1000}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := &testRepo{claimed: ClaimedEvent{OutboxID: "job", Attempts: 1, Event: Event{Type: "invoice.paid", ResourceID: "in_1"}}}
+			invoice := base
+			invoice.TaxEvidence = evidence
+			_, err := (Worker{Repo: repo, Provider: testProvider{invoice: invoice}, Now: func() time.Time { return now }}).RunOnce(context.Background())
+			if !errors.Is(err, ErrInvalidFinancialRecord) || !repo.retried || repo.applied != "" {
+				t.Fatalf("err=%v retried=%v applied=%q", err, repo.retried, repo.applied)
+			}
+		})
+	}
+}
