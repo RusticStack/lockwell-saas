@@ -23,7 +23,7 @@ func TestScalewayMailerSendsVerificationWithoutLoggingOrPersistingToken(t *testi
 	if err := mailer.SendVerification(context.Background(), "user@example.test", "raw-token"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body["text"].(string), "token=raw-token") {
+	if !strings.Contains(body["text"].(string), "#token=raw-token") || strings.Contains(body["text"].(string), "?token=") {
 		t.Fatalf("body=%#v", body)
 	}
 }

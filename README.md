@@ -58,7 +58,9 @@ Scaleway project and IAM token plus `LOCKWELL_SAAS_EMAIL_FROM` from a provider-v
 `LOCKWELL_SAAS_EMAIL_VERIFICATION_URL`; `LOCKWELL_SAAS_EMAIL_FROM_NAME` is optional. Verification tokens are random,
 expire after one hour, are stored only as SHA-256 digests, and are consumed once. An authenticated user requests a new
 message through `/v1/accounts/verification/request`; the confirmation link submits its token to
-`/v1/accounts/verification/confirm`.
+`/v1/accounts/verification/confirm`. The token is placed in the link fragment, not its query, so the browser does not
+send the bearer value to the landing host or a request log; the verification page reads the fragment locally and POSTs
+it in JSON.
 
 Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
 fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real

@@ -26,9 +26,10 @@ func (m ScalewayMailer) SendVerification(ctx context.Context, email, token strin
 	if err != nil || target.Scheme != "https" || target.Host == "" {
 		return errors.New("verification URL must be an absolute HTTPS URL")
 	}
-	q := target.Query()
-	q.Set("token", token)
-	target.RawQuery = q.Encode()
+	// Keep the bearer token in the URL fragment. Browsers do not send fragments
+	// to the landing host or in HTTP Referer headers; the verification page reads
+	// it locally and POSTs it to the confirmation API.
+	target.Fragment = "token=" + url.QueryEscape(token)
 	text := "Verify your Lockwell hosted account: " + target.String() + "\n\nThis link expires in one hour. If you did not create the account, ignore this message."
 	payload := map[string]any{"project_id": m.ProjectID, "from": map[string]string{"email": m.FromEmail, "name": m.FromName}, "to": []map[string]string{{"email": email}}, "subject": "Verify your Lockwell account", "text": text}
 	raw, _ := json.Marshal(payload)
