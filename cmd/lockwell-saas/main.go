@@ -13,6 +13,7 @@ import (
 	"github.com/RusticStack/lockwell-saas/internal/accounts"
 	"github.com/RusticStack/lockwell-saas/internal/billing"
 	"github.com/RusticStack/lockwell-saas/internal/config"
+	"github.com/RusticStack/lockwell-saas/internal/entitlements"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
 	"github.com/RusticStack/lockwell-saas/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,6 +52,11 @@ func main() {
 	}}
 	meterWorker := metering.Worker{Repo: repo, Provider: billing.MeterProvider{Stripe: billing.StripeClient{APIKey: cfg.StripeAPIKey, APIVersion: cfg.StripeAPIVersion}}}
 	go runMeterWorker(ctx, logger, meterWorker)
+	entitlementWorker := entitlements.Worker{
+		Repo: repo, Provider: billing.SubscriptionProvider{Stripe: billing.StripeClient{APIKey: cfg.StripeAPIKey, APIVersion: cfg.StripeAPIVersion}},
+		AllowedPrices: map[string]string{"starter": cfg.StripeStarterPrice, "team": cfg.StripeTeamPrice, "compliance": cfg.StripeCompliancePrice},
+	}
+	go runEntitlementWorker(ctx, logger, entitlementWorker)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -87,6 +93,32 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("serve", "error", err)
 		os.Exit(1)
+	}
+}
+
+func runEntitlementWorker(ctx context.Context, logger *slog.Logger, worker entitlements.Worker) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		processed, err := worker.RunOnce(ctx)
+		if err != nil {
+			logger.Warn("Stripe entitlement event pending", "error", err)
+		}
+		if processed {
+			continue
+		}
+		expired, err := worker.ExpireGraceOnce(ctx)
+		if err != nil {
+			logger.Warn("entitlement grace expiry failed", "error", err)
+		}
+		if expired {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 

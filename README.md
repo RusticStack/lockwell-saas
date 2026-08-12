@@ -53,3 +53,10 @@ Usage metering accepts only trusted, immutable rollups from future cell collecto
 Stripe Meter Event identifier and a transactional export row. Workers use bounded retries, reclaim abandoned claims,
 dead-letter repeated delivery failures, and compare Stripe's asynchronous meter summary with the internal aggregate
 before marking a window reconciled. Customer-facing requests cannot submit or alter billable usage.
+
+Verified subscription events are processed asynchronously from the transactional inbox. The worker retrieves the
+authoritative Stripe Subscription, rechecks account/customer metadata and the server-side plan/Price allowlist, and
+projects entitlement state transactionally. Only `invoice.paid` on an active/trialing subscription grants access;
+payment failure starts a bounded grace period, cancellation suspends access, stale events cannot roll state back, and
+equal-timestamp conflicts use a documented fail-closed priority. Every entitlement change creates a durable downstream
+outbox job for the cell-provisioning/suspension worker.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/RusticStack/lockwell-saas/internal/accounts"
 	"github.com/RusticStack/lockwell-saas/internal/billing"
+	"github.com/RusticStack/lockwell-saas/internal/entitlements"
 	"github.com/RusticStack/lockwell-saas/internal/metering"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -280,6 +281,10 @@ func (p Postgres) RecordStripeEvent(ctx context.Context, event billing.StripeEve
 		}
 		return false, tx.Commit(ctx)
 	}
+	topic := stripeEventTopic(event.Type)
+	if topic == "" {
+		return true, tx.Commit(ctx)
+	}
 	jobPayload, err := json.Marshal(map[string]string{"stripe_event_id": event.ID, "event_type": event.Type})
 	if err != nil {
 		return false, err
@@ -287,11 +292,180 @@ func (p Postgres) RecordStripeEvent(ctx context.Context, event billing.StripeEve
 	_, err = tx.Exec(ctx, `
 		INSERT INTO control_plane_outbox
 			(id, topic, aggregate_id, idempotency_key, payload_json)
-		VALUES ($1, 'stripe.event.received', $2, $3, $4)`, outboxID, event.ID, "stripe-event:"+event.ID, jobPayload)
+			VALUES ($1, $2, $3, $4, $5)`, outboxID, topic, event.ID, "stripe-event:"+event.ID, jobPayload)
 	if err != nil {
 		return false, err
 	}
 	return true, tx.Commit(ctx)
+}
+
+func (p Postgres) ClaimNextStripeEvent(ctx context.Context, now time.Time) (entitlements.ClaimedEvent, bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return entitlements.ClaimedEvent{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var claimed entitlements.ClaimedEvent
+	var payload []byte
+	err = tx.QueryRow(ctx, `
+		SELECT o.id::text, o.attempts + 1, i.event_id, i.event_type, i.stripe_created_at, i.payload_json::text
+		FROM control_plane_outbox o
+		JOIN stripe_event_inbox i ON i.event_id=o.aggregate_id
+		WHERE o.topic='stripe.event.received' AND o.completed_at IS NULL AND o.dead_lettered_at IS NULL
+		  AND o.available_at <= $1 AND (o.claimed_at IS NULL OR o.claimed_at < $2)
+		ORDER BY o.available_at, o.created_at
+		FOR UPDATE OF o SKIP LOCKED LIMIT 1`, now, now.Add(-5*time.Minute)).
+		Scan(&claimed.OutboxID, &claimed.Attempts, &claimed.Event.ID, &claimed.Event.Type, &claimed.Event.CreatedAt, &payload)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entitlements.ClaimedEvent{}, false, nil
+	}
+	if err != nil {
+		return entitlements.ClaimedEvent{}, false, err
+	}
+	claimed.Event.SubscriptionID = subscriptionID(claimed.Event.Type, payload)
+	if _, err := tx.Exec(ctx, `UPDATE control_plane_outbox SET claimed_at=$2, attempts=$3 WHERE id=$1`, claimed.OutboxID, now, claimed.Attempts); err != nil {
+		return entitlements.ClaimedEvent{}, false, err
+	}
+	return claimed, true, tx.Commit(ctx)
+}
+
+func subscriptionID(eventType string, payload []byte) string {
+	var envelope struct {
+		Data struct {
+			Object struct {
+				ID           string `json:"id"`
+				Subscription string `json:"subscription"`
+				Parent       struct {
+					SubscriptionDetails struct {
+						Subscription string `json:"subscription"`
+					} `json:"subscription_details"`
+				} `json:"parent"`
+			} `json:"object"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return ""
+	}
+	switch eventType {
+	case "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted":
+		return envelope.Data.Object.ID
+	case "checkout.session.completed":
+		return envelope.Data.Object.Subscription
+	case "invoice.paid", "invoice.payment_failed":
+		if envelope.Data.Object.Subscription != "" {
+			return envelope.Data.Object.Subscription
+		}
+		return envelope.Data.Object.Parent.SubscriptionDetails.Subscription
+	default:
+		return ""
+	}
+}
+
+func (p Postgres) ApplySubscriptionProjection(ctx context.Context, outboxID string, projection entitlements.Projection) (bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var boundCustomer string
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(stripe_customer_id,'') FROM customer_accounts WHERE id=$1 FOR UPDATE`, projection.AccountID).Scan(&boundCustomer); err != nil {
+		return false, err
+	}
+	if boundCustomer != projection.CustomerID {
+		return false, errors.New("Stripe customer does not match account binding")
+	}
+	var lastCreated time.Time
+	var lastPriority int
+	err = tx.QueryRow(ctx, `SELECT last_stripe_event_created,last_stripe_event_priority FROM hosted_subscriptions WHERE stripe_subscription_id=$1 FOR UPDATE`, projection.ID).Scan(&lastCreated, &lastPriority)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return false, err
+	}
+	mutated := errors.Is(err, pgx.ErrNoRows) || projection.Event.CreatedAt.After(lastCreated) || (projection.Event.CreatedAt.Equal(lastCreated) && projection.Event.Priority > lastPriority)
+	if mutated {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO hosted_subscriptions
+				(stripe_subscription_id,account_id,stripe_customer_id,plan_code,stripe_price_id,stripe_status,
+				 entitlement_status,entitlement_until,grace_until,cancel_at_period_end,last_stripe_event_created,last_stripe_event_priority,last_stripe_event_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			ON CONFLICT (stripe_subscription_id) DO UPDATE SET
+				plan_code=EXCLUDED.plan_code, stripe_price_id=EXCLUDED.stripe_price_id, stripe_status=EXCLUDED.stripe_status,
+				entitlement_status=CASE WHEN EXCLUDED.entitlement_status='pending' THEN hosted_subscriptions.entitlement_status ELSE EXCLUDED.entitlement_status END,
+				entitlement_until=CASE WHEN EXCLUDED.entitlement_status='pending' THEN hosted_subscriptions.entitlement_until ELSE EXCLUDED.entitlement_until END,
+				grace_until=CASE WHEN EXCLUDED.entitlement_status='pending' THEN hosted_subscriptions.grace_until ELSE EXCLUDED.grace_until END,
+				cancel_at_period_end=EXCLUDED.cancel_at_period_end,last_stripe_event_created=EXCLUDED.last_stripe_event_created,
+				last_stripe_event_priority=EXCLUDED.last_stripe_event_priority,
+				last_stripe_event_id=EXCLUDED.last_stripe_event_id,updated_at=now()`,
+			projection.ID, projection.AccountID, projection.CustomerID, projection.PlanCode, projection.PriceID, projection.Status,
+			projection.EntitlementStatus, projection.EntitlementUntil, projection.GraceUntil, projection.CancelAtPeriodEnd,
+			projection.Event.CreatedAt, projection.Event.Priority, projection.Event.ID)
+		if err != nil {
+			return false, err
+		}
+		jobID, err := randomUUID()
+		if err != nil {
+			return false, err
+		}
+		jobPayload, _ := json.Marshal(map[string]string{"subscription_id": projection.ID, "account_id": projection.AccountID, "entitlement_status": string(projection.EntitlementStatus)})
+		if _, err := tx.Exec(ctx, `INSERT INTO control_plane_outbox (id,topic,aggregate_id,idempotency_key,payload_json) VALUES ($1,'entitlement.changed',$2,$3,$4) ON CONFLICT (idempotency_key) DO NOTHING`, jobID, projection.ID, "entitlement:"+projection.Event.ID, jobPayload); err != nil {
+			return false, err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE control_plane_outbox SET completed_at=now(),claimed_at=NULL,last_error=NULL WHERE id=$1`, outboxID); err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE stripe_event_inbox SET processed_at=now(),processing_error=NULL WHERE event_id=$1`, projection.Event.ID); err != nil {
+		return false, err
+	}
+	return mutated, tx.Commit(ctx)
+}
+
+func (p Postgres) RetryStripeEvent(ctx context.Context, outboxID string, retryAt time.Time, message string, deadLetter bool) error {
+	var deadLetteredAt any
+	if deadLetter {
+		deadLetteredAt = time.Now().UTC()
+	}
+	_, err := p.Pool.Exec(ctx, `UPDATE control_plane_outbox SET available_at=$2,claimed_at=NULL,last_error=$3,dead_lettered_at=$4 WHERE id=$1 AND completed_at IS NULL`, outboxID, retryAt, message, deadLetteredAt)
+	return err
+}
+
+func (p Postgres) SuspendExpiredGrace(ctx context.Context, now time.Time) (string, bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var subscriptionID string
+	var accountID string
+	err = tx.QueryRow(ctx, `SELECT stripe_subscription_id,account_id::text FROM hosted_subscriptions WHERE entitlement_status='grace' AND grace_until <= $1 ORDER BY grace_until FOR UPDATE SKIP LOCKED LIMIT 1`, now).Scan(&subscriptionID, &accountID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE hosted_subscriptions SET entitlement_status='suspended',updated_at=now() WHERE stripe_subscription_id=$1`, subscriptionID); err != nil {
+		return "", false, err
+	}
+	jobID, err := randomUUID()
+	if err != nil {
+		return "", false, err
+	}
+	payload, _ := json.Marshal(map[string]string{"subscription_id": subscriptionID, "account_id": accountID, "entitlement_status": "suspended"})
+	if _, err := tx.Exec(ctx, `INSERT INTO control_plane_outbox (id,topic,aggregate_id,idempotency_key,payload_json) VALUES ($1,'entitlement.changed',$2,$3,$4)`, jobID, subscriptionID, "entitlement-grace-expired:"+subscriptionID+":"+now.Format(time.RFC3339), payload); err != nil {
+		return "", false, err
+	}
+	return subscriptionID, true, tx.Commit(ctx)
+}
+
+func stripeEventTopic(eventType string) string {
+	switch eventType {
+	case "checkout.session.completed", "customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted", "invoice.paid", "invoice.payment_failed":
+		return "stripe.event.received"
+	case "invoice.finalization_failed", "invoice.payment_action_required":
+		return "billing.alert"
+	default:
+		return ""
+	}
 }
 
 func (p Postgres) Ping(ctx context.Context) error {
