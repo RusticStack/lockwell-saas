@@ -20,13 +20,14 @@ func TestPostgresMeterExportAndReconciliationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	repo := Postgres{Pool: pool}
 	accountID, err := randomUUID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = pool.Exec(ctx, `INSERT INTO customer_accounts (id,email,password_hash,terms_version,terms_accepted_at,stripe_customer_id) VALUES ($1,$2,'test-hash','test',now(),'cus_test')`, accountID, accountID+"@example.test")
+	customerID := "cus_" + accountID
+	_, err = pool.Exec(ctx, `INSERT INTO customer_accounts (id,email,password_hash,terms_version,terms_accepted_at,stripe_customer_id) VALUES ($1,$2,'test-hash','test',now(),$3)`, accountID, accountID+"@example.test", customerID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +38,7 @@ func TestPostgresMeterExportAndReconciliationLifecycle(t *testing.T) {
 	})
 
 	end := time.Now().UTC().Add(-time.Hour).Truncate(time.Minute)
-	rollup, err := metering.NewRollup(accountID, "cus_test", metering.Operations, end.Add(-time.Hour), end, 42, "rev-1", []byte("source evidence"))
+	rollup, err := metering.NewRollup(accountID, customerID, metering.Operations, end.Add(-time.Hour), end, 42, "rev-1", []byte("source evidence"))
 	if err != nil {
 		t.Fatal(err)
 	}
