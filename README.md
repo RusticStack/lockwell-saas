@@ -44,6 +44,7 @@ Required environment:
 | `LOCKWELL_SAAS_PORTAL_RETURN_URL` | Customer Portal return URL |
 | `LOCKWELL_SAAS_TERMS_VERSION` | Exact terms version new accounts must accept |
 | `LOCKWELL_SAAS_LISTEN_ADDR` | Optional listener; defaults to `127.0.0.1:8080` |
+| `LOCKWELL_SAAS_CUSTOMER_ORIGIN` | Optional exact HTTP(S) origin allowed to call `/v1/` from a browser |
 
 Provisioning is disabled unless `LOCKWELL_SAAS_PROVISIONING_ENABLED=true`. When enabled, startup fails closed unless
 all of the following are present: `LOCKWELL_SAAS_SCALEWAY_PROJECT_ID`, `LOCKWELL_SAAS_SCALEWAY_REGION`,
@@ -60,7 +61,9 @@ expire after one hour, are stored only as SHA-256 digests, and are consumed once
 message through `/v1/accounts/verification/request`; the confirmation link submits its token to
 `/v1/accounts/verification/confirm`. The token is placed in the link fragment, not its query, so the browser does not
 send the bearer value to the landing host or a request log; the verification page reads the fragment locally and POSTs
-it in JSON.
+it to the API. Browser access is disabled unless `LOCKWELL_SAAS_CUSTOMER_ORIGIN` is set to one exact origin. The CORS
+policy permits only `POST`/`OPTIONS` with `Authorization` and `Content-Type`, never enables credentialed cookies, and
+does not expose Stripe webhooks or operational endpoints.
 
 Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
 fail closed until a future verified-email delivery/redemption slice marks the address verified. Never put real
