@@ -35,6 +35,46 @@ type cellBucket struct {
 	Name string `json:"name"`
 }
 
+func (c LockwellCell) Suspend(ctx context.Context, r Reservation, adminToken, accessKeyID string) error {
+	if accessKeyID == "" {
+		return errors.New("active access key identity is required")
+	}
+	keys, err := c.listKeys(ctx, r, adminToken)
+	if err != nil {
+		return err
+	}
+	var target cellKey
+	for _, key := range keys {
+		if key.AccessKeyID == accessKeyID {
+			target = key
+			break
+		}
+	}
+	if target.ID == "" {
+		return errors.New("provisioned access key was not found")
+	}
+	if !strings.EqualFold(target.Status, "active") {
+		return nil
+	}
+	var ignored cellKey
+	if err = c.adminJSON(ctx, r, adminToken, http.MethodPost, "/tenants/"+url.PathEscape(r.TenantID)+"/keys/"+url.PathEscape(target.ID)+"/revoke", map[string]string{"reason": "hosted entitlement suspended"}, &ignored); err != nil {
+		return err
+	}
+	keys, err = c.listKeys(ctx, r, adminToken)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if key.ID == target.ID {
+			if strings.EqualFold(key.Status, "active") {
+				return errors.New("Lockwell key remained active after entitlement suspension")
+			}
+			return nil
+		}
+	}
+	return errors.New("Lockwell key disappeared before suspension readback")
+}
+
 func (c LockwellCell) Provision(ctx context.Context, r Reservation, adminToken string, vault SecretVault) (ProvisionedCredential, error) {
 	if r.TenantID == "" || r.BucketName == "" || r.QuotaBytes <= 0 {
 		return ProvisionedCredential{}, errors.New("invalid cell reservation")

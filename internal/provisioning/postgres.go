@@ -75,7 +75,7 @@ func (p Postgres) Reserve(ctx context.Context, accountID, planCode string, quota
 }
 
 func (p Postgres) Complete(ctx context.Context, id, accessKeyID, secretRef string, now time.Time) error {
-	c, err := p.Pool.Exec(ctx, `UPDATE tenant_provisions SET access_key_id=$2,credential_secret_ref=$3,status='ready',last_error=NULL,updated_at=$4 WHERE id=$1 AND status IN ('reserved','failed')`, id, accessKeyID, secretRef, now)
+	c, err := p.Pool.Exec(ctx, `UPDATE tenant_provisions SET access_key_id=$2,credential_secret_ref=$3,status='ready',last_error=NULL,updated_at=$4 WHERE id=$1 AND status IN ('reserved','failed','suspended')`, id, accessKeyID, secretRef, now)
 	if err != nil {
 		return err
 	}
@@ -134,4 +134,56 @@ func (p Postgres) ReleaseRedemption(ctx context.Context, id string) error {
 		return fmt.Errorf("release redemption: %w", ErrInvalidRedemption)
 	}
 	return nil
+}
+
+func (p Postgres) ClaimNextEnforcement(ctx context.Context, now time.Time) (EnforcementJob, bool, error) {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return EnforcementJob{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var job EnforcementJob
+	err = tx.QueryRow(ctx, `SELECT o.id::text,o.attempts+1,s.account_id::text,s.entitlement_status,p.id IS NOT NULL,COALESCE(p.id::text,''),COALESCE(p.cell_id,''),COALESCE(c.region,''),COALESCE(c.public_endpoint,''),COALESCE(c.admin_endpoint,''),COALESCE(c.admin_secret_ref,''),COALESCE(p.tenant_id,''),COALESCE(p.bucket_name,''),COALESCE(p.status,''),COALESCE(p.plan_code,''),COALESCE(p.quota_bytes,0),COALESCE(p.access_key_id,'') FROM control_plane_outbox o JOIN hosted_subscriptions s ON s.stripe_subscription_id=o.aggregate_id LEFT JOIN tenant_provisions p ON p.account_id=s.account_id LEFT JOIN hosting_cells c ON c.id=p.cell_id WHERE o.topic='entitlement.changed' AND o.completed_at IS NULL AND o.dead_lettered_at IS NULL AND o.available_at<=$1 AND (o.claimed_at IS NULL OR o.claimed_at<$2) ORDER BY o.available_at,o.created_at FOR UPDATE OF o SKIP LOCKED LIMIT 1`, now, now.Add(-5*time.Minute)).Scan(&job.OutboxID, &job.Attempts, &job.AccountID, &job.Status, &job.HasProvision, &job.Reservation.ID, &job.Reservation.CellID, &job.Reservation.Region, &job.Reservation.PublicEndpoint, &job.Reservation.AdminEndpoint, &job.Reservation.AdminSecretRef, &job.Reservation.TenantID, &job.Reservation.BucketName, &job.Reservation.Status, &job.Reservation.PlanCode, &job.Reservation.QuotaBytes, &job.AccessKeyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return EnforcementJob{}, false, nil
+	}
+	if err != nil {
+		return EnforcementJob{}, false, err
+	}
+	job.Reservation.AccountID = job.AccountID
+	if _, err = tx.Exec(ctx, `UPDATE control_plane_outbox SET claimed_at=$2,attempts=$3 WHERE id=$1`, job.OutboxID, now, job.Attempts); err != nil {
+		return EnforcementJob{}, false, err
+	}
+	return job, true, tx.Commit(ctx)
+}
+func (p Postgres) CompleteEnforcement(ctx context.Context, outboxID, provisionStatus, message string, now time.Time) error {
+	tx, err := p.Pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if provisionStatus != "" {
+		if _, err = tx.Exec(ctx, `UPDATE tenant_provisions p SET status=$2,updated_at=$3,last_error=NULL FROM control_plane_outbox o JOIN hosted_subscriptions s ON s.stripe_subscription_id=o.aggregate_id WHERE o.id=$1 AND p.account_id=s.account_id`, outboxID, provisionStatus, now); err != nil {
+			return err
+		}
+		if provisionStatus == "suspended" {
+			if _, err = tx.Exec(ctx, `UPDATE credential_redemptions d SET redeemed_at=$2,claim_expires_at=NULL FROM tenant_provisions p JOIN control_plane_outbox o ON o.id=$1 JOIN hosted_subscriptions s ON s.stripe_subscription_id=o.aggregate_id WHERE d.provision_id=p.id AND p.account_id=s.account_id AND d.redeemed_at IS NULL`, outboxID, now); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = tx.Exec(ctx, `UPDATE control_plane_outbox SET completed_at=$2,claimed_at=NULL,last_error=NULL WHERE id=$1 AND completed_at IS NULL`, outboxID, now)
+	if err != nil {
+		return err
+	}
+	_ = message
+	return tx.Commit(ctx)
+}
+func (p Postgres) RetryEnforcement(ctx context.Context, outboxID string, retryAt time.Time, message string, dead bool) error {
+	var deadAt any
+	if dead {
+		deadAt = time.Now().UTC()
+	}
+	_, err := p.Pool.Exec(ctx, `UPDATE control_plane_outbox SET available_at=$2,claimed_at=NULL,last_error=$3,dead_lettered_at=$4 WHERE id=$1 AND completed_at IS NULL`, outboxID, retryAt, message, deadAt)
+	return err
 }

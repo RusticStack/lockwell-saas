@@ -98,7 +98,6 @@ func TestLockwellCellProvisionsAndVerifiesTenantQuotaBucketAndCredential(t *test
 		t.Fatalf("vault value=%q err=%v", value, err)
 	}
 	mu.Lock()
-	defer mu.Unlock()
 	active := 0
 	revoked := 0
 	for _, key := range keys {
@@ -110,5 +109,16 @@ func TestLockwellCellProvisionsAndVerifiesTenantQuotaBucketAndCredential(t *test
 	}
 	if active != 1 || revoked != 1 {
 		t.Fatalf("active=%d revoked=%d", active, revoked)
+	}
+	mu.Unlock()
+	if err := (LockwellCell{HTTPClient: server.Client()}).Suspend(context.Background(), r, "admin-token", result.AccessKeyID); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, key := range keys {
+		if key.Status == "active" {
+			t.Fatalf("key %s remained active", key.ID)
+		}
 	}
 }
