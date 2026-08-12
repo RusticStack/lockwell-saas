@@ -7,7 +7,7 @@ import (
 
 const (
 	allowMethods = "POST, OPTIONS"
-	allowHeaders = "Authorization, Content-Type"
+	allowHeaders = "Authorization, Content-Type, Idempotency-Key"
 )
 
 // CustomerCORS permits the configured browser origin to call customer-facing
@@ -46,7 +46,7 @@ func CustomerCORS(origin string, next http.Handler) http.Handler {
 func allowedRequestHeaders(value string) bool {
 	for _, header := range strings.Split(value, ",") {
 		switch strings.ToLower(strings.TrimSpace(header)) {
-		case "", "authorization", "content-type":
+		case "", "authorization", "content-type", "idempotency-key":
 		default:
 			return false
 		}

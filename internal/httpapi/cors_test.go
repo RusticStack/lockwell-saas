@@ -13,7 +13,7 @@ func TestCustomerCORSAllowsExactOriginPreflight(t *testing.T) {
 	request := httptest.NewRequest(http.MethodOptions, "/v1/accounts/login", nil)
 	request.Header.Set("Origin", "https://app.example.test")
 	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
-	request.Header.Set("Access-Control-Request-Headers", "content-type, authorization")
+	request.Header.Set("Access-Control-Request-Headers", "content-type, authorization, idempotency-key")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 

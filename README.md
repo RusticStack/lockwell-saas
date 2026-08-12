@@ -62,7 +62,7 @@ message through `/v1/accounts/verification/request`; the confirmation link submi
 `/v1/accounts/verification/confirm`. The token is placed in the link fragment, not its query, so the browser does not
 send the bearer value to the landing host or a request log; the verification page reads the fragment locally and POSTs
 it to the API. Browser access is disabled unless `LOCKWELL_SAAS_CUSTOMER_ORIGIN` is set to one exact origin. The CORS
-policy permits only `POST`/`OPTIONS` with `Authorization` and `Content-Type`, never enables credentialed cookies, and
+policy permits only `POST`/`OPTIONS` with `Authorization`, `Content-Type`, and `Idempotency-Key`, never enables credentialed cookies, and
 does not expose Stripe webhooks or operational endpoints.
 
 Apply migrations in numeric order before starting the service. Accounts are created unverified; Checkout and Portal
